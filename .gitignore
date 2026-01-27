@@ -1,0 +1,74 @@
+/target/
+/.idea/
+/.vscode/
+*.iml
+*.log
+.DS_Store
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# JVM dumps
+*.hprof
+hs_err_pid*.log
+
+# IntelliJ / Eclipse
+.project
+.classpath
+.settings/
+
+# Maven Wrapper (optional, already present)
+.mvn/wrapper/maven-wrapper.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Gradle
+.gradle/
+
+# Maven Wrapper (optional)
+.mvn/wrapper/maven-wrapper.jar
+
+# Runtime temp
+/tmp/
+
+# Additional Java/Spring Boot
+*.class
+*.jar
+*.war
+*.ear
+
+# Logs
+logs/
+**/logs/
+
+# OS
+Thumbs.db
+**/.DS_Store
+
+# Docker volumes/data (if mapped to folders)
+**/minio-data/
+**/postgres-data/
+**/kafka-data/
+docker-compose.override.yml
+**/.env
+compose.override.yml
+docker-compose.override.yaml
+
+# Misc
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# Test uploads / sample media
+*.mp4
+*.mov
+*.mkv
+*.mp3
+*.wav
+
+# Node (if any frontend)
+node_modules/
+dist/
+build/

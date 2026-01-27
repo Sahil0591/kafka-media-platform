@@ -1,0 +1,143 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: media
+      POSTGRES_USER: media
+      POSTGRES_PASSWORD: media
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U media -d media"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/ready || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-10-02T08-27-28Z
+    depends_on:
+      - minio
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      set -e
+      echo "Waiting for MinIO to be ready..."
+      until mc alias set local http://minio:9000 minioadmin minioadmin; do
+        sleep 2
+      done
+      mc mb --ignore-existing local/media || true
+      mkdir -p /tmp/mcinit && touch /tmp/mcinit/.keep
+      mc cp /tmp/mcinit/.keep local/media/hls/.keep || true
+      mc anonymous set download local/media/hls/ || true
+      echo "MinIO bucket 'media' ensured with public 'hls/' prefix."
+
+  kafka:
+    image: confluentinc/cp-kafka:7.8.6
+    ports:
+      - "9092:9092"      # internal listener for containers
+      - "29092:29092"    # external listener for host/WSL
+    environment:
+      CLUSTER_ID: local-kraft-cluster
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    ports:
+      - "8088:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+    depends_on:
+      - kafka
+
+  media-api:
+    build:
+      context: .
+      dockerfile: media-api/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/media
+      SPRING_DATASOURCE_USERNAME: media
+      SPRING_DATASOURCE_PASSWORD: media
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      APP_PUBLIC_BASE_URL: http://localhost:8080
+      APP_MINIO_ENDPOINT: http://minio:9000
+      APP_MINIO_ACCESS_KEY: minioadmin
+      APP_MINIO_SECRET_KEY: minioadmin
+      APP_MINIO_BUCKET: media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+
+  media-worker:
+    build:
+      context: .
+      dockerfile: media-worker/Dockerfile
+    environment:
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - APP_MINIO_ENDPOINT=http://minio:9000
+      - APP_MINIO_ACCESS_KEY=minioadmin
+      - APP_MINIO_SECRET_KEY=minioadmin
+      - APP_MINIO_BUCKET=media
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/media
+      - SPRING_DATASOURCE_USERNAME=media
+      - SPRING_DATASOURCE_PASSWORD=media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+
+volumes:
+  minio-data:
+  postgres-data:
+  kafka-data:

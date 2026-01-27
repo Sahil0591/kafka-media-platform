@@ -1,0 +1,27 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: media-api
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/media}
+    username: ${SPRING_DATASOURCE_USERNAME:media}
+    password: ${SPRING_DATASOURCE_PASSWORD:media}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+app:
+  public-base-url: ${APP_PUBLIC_BASE_URL:http://localhost:8080}
+  minio:
+    endpoint: ${APP_MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${APP_MINIO_ACCESS_KEY:minioadmin}
+    secret-key: ${APP_MINIO_SECRET_KEY:minioadmin}
+    bucket: ${APP_MINIO_BUCKET:media}

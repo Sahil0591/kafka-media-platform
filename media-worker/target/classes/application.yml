@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: media-worker
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/media}
+    username: ${SPRING_DATASOURCE_USERNAME:media}
+    password: ${SPRING_DATASOURCE_PASSWORD:media}
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: media-worker
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.example.media.*
+        spring.json.use.type.headers: false
+
+app:
+  minio:
+    endpoint: ${APP_MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${APP_MINIO_ACCESS_KEY:minioadmin}
+    secret-key: ${APP_MINIO_SECRET_KEY:minioadmin}
+    bucket: ${APP_MINIO_BUCKET:media}

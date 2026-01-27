@@ -1,0 +1,5 @@
+com/example/media/worker/service/TranscodeService.class
+com/example/media/worker/MediaWorkerApplication.class
+com/example/media/worker/service/TranscodeService$HlsOutput.class
+com/example/media/worker/kafka/UploadedListener.class
+com/example/media/worker/config/MinioConfig.class

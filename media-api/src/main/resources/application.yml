@@ -14,15 +14,15 @@ spring:
     properties:
       hibernate:
         jdbc:
-          time_zone: UTC
+          "[time_zone]": UTC
   kafka:
     bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       properties:
-        spring.json.add.type.headers: false
-        spring.json.trusted.packages: com.example.media.*
+        "[spring.json.add.type.headers]": false
+        "[spring.json.trusted.packages]": com.example.media.*
     template:
       default-topic: media.uploaded
 
@@ -33,3 +33,6 @@ app:
     access-key: ${APP_MINIO_ACCESS_KEY:minioadmin}
     secret-key: ${APP_MINIO_SECRET_KEY:minioadmin}
     bucket: ${APP_MINIO_BUCKET:media}
+  jwt:
+    secret: ${APP_JWT_SECRET:your-secret-key-must-be-at-least-256-bits-long-for-hs256-algorithm}
+    expiration: ${APP_JWT_EXPIRATION:86400000} # 24 hours

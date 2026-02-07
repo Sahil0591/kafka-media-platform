@@ -1,8 +1,0 @@
-com/example/media/common/events/MediaFailedEvent.class
-com/example/media/common/events/MediaUploadedEvent.class
-com/example/media/common/model/MediaType.class
-com/example/media/common/events/MediaTranscodeProgressEvent.class
-com/example/media/common/kafka/Topics.class
-com/example/media/common/events/RenditionDto.class
-com/example/media/common/events/MediaProcessedEvent.class
-com/example/media/common/model/ProcessingStage.class

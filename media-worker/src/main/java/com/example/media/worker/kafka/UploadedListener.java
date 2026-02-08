@@ -5,6 +5,7 @@ import com.example.media.common.events.MediaProcessedEvent;
 import com.example.media.common.events.MediaUploadedEvent;
 import com.example.media.common.events.RenditionDto;
 import com.example.media.common.kafka.Topics;
+import com.example.media.common.model.MediaType;
 import com.example.media.worker.service.TranscodeService;
 import io.minio.MinioClient;
 import io.minio.GetObjectArgs;
@@ -63,19 +64,26 @@ public class UploadedListener {
                 Files.copy(stream, tmp, StandardCopyOption.REPLACE_EXISTING);
             }
 
-            var out = transcodeService.transcodeToHls(tmp, mediaId);
+                var out = transcodeService.transcodeToHls(tmp, mediaId, evt.type());
 
             // Update DB
             jdbc.update("update media set status = ?, hls_master_manifest_key = ?, updated_at = now() at time zone 'utc' where id = ?",
                     "READY", out.masterKey(), UUID.fromString(mediaId));
 
-            jdbc.update("update processing_jobs set status = ?, progress = ?, ended_at = now() at time zone 'utc' where id = ?",
+                jdbc.update("update processing_jobs set status = ?, progress = ?, ended_at = now() at time zone 'utc' where id = ?",
                     "DONE", 100, jobId);
 
-            var renditions = List.of(
+                List<RenditionDto> renditions;
+                if (evt.type() == MediaType.AUDIO) {
+                renditions = List.of(
+                    new RenditionDto("audio", out.variantKeys().get(0))
+                );
+                } else {
+                renditions = List.of(
                     new RenditionDto("720p", out.variantKeys().get(0)),
                     new RenditionDto("480p", out.variantKeys().get(1))
-            );
+                );
+                }
             kafkaTemplate.send(Topics.MEDIA_PROCESSED, mediaId, new MediaProcessedEvent(mediaId, "READY", out.masterKey(), renditions, null, Instant.now()));
         } catch (Exception e) {
             e.printStackTrace(); // Print error for visibility

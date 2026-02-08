@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: media-api
+  servlet:
+    multipart:
+      max-file-size: 250MB
+      max-request-size: 250MB
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/media}
     username: ${SPRING_DATASOURCE_USERNAME:media}

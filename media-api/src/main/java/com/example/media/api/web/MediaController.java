@@ -117,7 +117,20 @@ public class MediaController {
         Media m = mediaRepository.findById(mediaId).orElseThrow();
         var job = jobRepository.findFirstByMediaIdOrderByStartedAtDesc(mediaId);
         Map<String, Object> result = new java.util.HashMap<>();
+        result.put("id", m.getId());
+        result.put("title", m.getTitle());
+        result.put("type", m.getType());
         result.put("status", m.getStatus());
+
+        String message = switch (m.getStatus()) {
+            case "READY" -> "Uploaded successfully";
+            case "FAILED" -> "Processing failed";
+            case "PROCESSING" -> "Processing";
+            case "UPLOADING" -> "Uploading";
+            default -> m.getStatus();
+        };
+        result.put("message", message);
+
         result.put("stage", job.map(j -> j.getStage()).orElse(null));
         result.put("progress", job.map(j -> j.getProgress()).orElse(null));
         result.put("error", job.map(j -> j.getErrorMessage()).orElse(null));

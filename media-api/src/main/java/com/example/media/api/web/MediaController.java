@@ -11,12 +11,16 @@ import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
+import java.net.URLConnection;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Map;
@@ -56,12 +60,12 @@ public class MediaController {
 
     @PostMapping("/init-upload")
     @Transactional
-    public InitUploadResponse initUpload(@RequestBody InitUploadRequest req) {
+    public InitUploadResponse initUpload(@AuthenticationPrincipal UUID userId, @RequestBody InitUploadRequest req) {
         UUID id = UUID.randomUUID();
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         Media m = new Media();
         m.setId(id);
-        m.setOwnerId("user-1");
+        m.setOwnerId(userId.toString());
         m.setTitle(req.title());
         m.setType(req.type());
         m.setStatus("UPLOADING");
@@ -74,8 +78,8 @@ public class MediaController {
     }
 
     @PutMapping(path = "/{mediaId}/upload", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
-    public Map<String, Object> upload(@PathVariable("mediaId") UUID mediaId, @RequestParam("file") MultipartFile file) throws Exception {
-        Media m = mediaRepository.findById(mediaId).orElseThrow();
+    public Map<String, Object> upload(@AuthenticationPrincipal UUID userId, @PathVariable("mediaId") UUID mediaId, @RequestParam("file") MultipartFile file) throws Exception {
+        Media m = loadOwnedMedia(userId, mediaId);
         String key = m.getRawObjectKey();
         try (InputStream in = file.getInputStream()) {
             PutObjectArgs args = PutObjectArgs.builder()
@@ -89,32 +93,66 @@ public class MediaController {
         return Map.of("objectKey", key, "size", file.getSize());
     }
 
-    public record CompleteUploadRequest(String objectKey) {}
+    public record CompleteUploadRequest(String objectKey, String contentType) {}
 
     @PostMapping("/{mediaId}/complete-upload")
     @Transactional
-    public Map<String, String> completeUpload(@PathVariable("mediaId") UUID mediaId, @RequestBody CompleteUploadRequest req) {
-        Media m = mediaRepository.findById(mediaId).orElseThrow();
+    public Map<String, String> completeUpload(@AuthenticationPrincipal UUID userId, @PathVariable("mediaId") UUID mediaId, @RequestBody CompleteUploadRequest req) {
+        Media m = loadOwnedMedia(userId, mediaId);
+        String storedKey = m.getRawObjectKey();
+        if (storedKey == null || storedKey.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Upload not initialized");
+        }
+        if (req != null && req.objectKey() != null && !req.objectKey().equals(storedKey)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "objectKey mismatch");
+        }
+
         m.setStatus("PROCESSING");
         m.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         mediaRepository.save(m);
+
+        String filename = storedKey.substring(storedKey.lastIndexOf('/') + 1);
+        String contentType = inferContentType(m, filename, req == null ? null : req.contentType());
 
         MediaUploadedEvent evt = new MediaUploadedEvent(
                 mediaId.toString(),
                 m.getOwnerId(),
                 MediaType.valueOf(m.getType()),
-                req.objectKey(),
-                req.objectKey().substring(req.objectKey().lastIndexOf('/') + 1),
-                "video/mp4",
+                storedKey,
+                filename,
+                contentType,
                 java.time.Instant.now()
         );
         kafkaTemplate.send(Topics.MEDIA_UPLOADED, mediaId.toString(), evt);
         return Map.of("status", "PROCESSING");
     }
 
+    private static String inferContentType(Media media, String filename, String requestContentType) {
+        if (requestContentType != null && !requestContentType.isBlank()) {
+            return requestContentType;
+        }
+
+        String guessed = filename == null ? null : URLConnection.guessContentTypeFromName(filename);
+        if (guessed != null && !guessed.isBlank()) {
+            return guessed;
+        }
+
+        // Conservative defaults if we can't infer reliably.
+        if (media != null) {
+            String type = media.getType();
+            if ("AUDIO".equalsIgnoreCase(type)) {
+                return "audio/mpeg";
+            }
+            if ("VIDEO".equalsIgnoreCase(type)) {
+                return "video/mp4";
+            }
+        }
+        return "application/octet-stream";
+    }
+
     @GetMapping("/{mediaId}/status")
-    public Map<String, Object> status(@PathVariable("mediaId") UUID mediaId) {
-        Media m = mediaRepository.findById(mediaId).orElseThrow();
+    public Map<String, Object> status(@AuthenticationPrincipal UUID userId, @PathVariable("mediaId") UUID mediaId) {
+        Media m = loadOwnedMedia(userId, mediaId);
         var job = jobRepository.findFirstByMediaIdOrderByStartedAtDesc(mediaId);
         Map<String, Object> result = new java.util.HashMap<>();
         result.put("id", m.getId());
@@ -138,13 +176,21 @@ public class MediaController {
     }
 
     @GetMapping("/{mediaId}/play")
-    public Map<String, String> play(@PathVariable("mediaId") UUID mediaId) {
-        Media m = mediaRepository.findById(mediaId).orElseThrow();
+    public Map<String, String> play(@AuthenticationPrincipal UUID userId, @PathVariable("mediaId") UUID mediaId) {
+        Media m = loadOwnedMedia(userId, mediaId);
         String hlsKey = m.getHlsMasterManifestKey();
         if (hlsKey == null) {
             throw new IllegalStateException("Media not ready");
         }
         String url = "http://localhost:9000/" + bucket + "/" + hlsKey;
         return Map.of("hlsUrl", url);
+    }
+
+    private Media loadOwnedMedia(UUID userId, UUID mediaId) {
+        Media m = mediaRepository.findById(mediaId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (m.getOwnerId() == null || !m.getOwnerId().equals(userId.toString())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+        }
+        return m;
     }
 }

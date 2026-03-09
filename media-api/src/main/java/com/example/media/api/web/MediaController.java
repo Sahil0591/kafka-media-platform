@@ -65,7 +65,7 @@ public class MediaController {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         Media m = new Media();
         m.setId(id);
-        m.setOwnerId(userId.toString());
+        m.setOwnerId(userId);
         m.setTitle(req.title());
         m.setType(req.type());
         m.setStatus("UPLOADING");
@@ -116,7 +116,7 @@ public class MediaController {
 
         MediaUploadedEvent evt = new MediaUploadedEvent(
                 mediaId.toString(),
-                m.getOwnerId(),
+                m.getOwnerId().toString(),
                 MediaType.valueOf(m.getType()),
                 storedKey,
                 filename,
@@ -188,7 +188,7 @@ public class MediaController {
 
     private Media loadOwnedMedia(UUID userId, UUID mediaId) {
         Media m = mediaRepository.findById(mediaId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
-        if (m.getOwnerId() == null || !m.getOwnerId().equals(userId.toString())) {
+        if (!userId.equals(m.getOwnerId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN);
         }
         return m;

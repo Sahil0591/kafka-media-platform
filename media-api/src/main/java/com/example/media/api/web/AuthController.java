@@ -29,4 +29,10 @@ public class AuthController {
         AuthResponse response = authService.login(request);
         return ResponseEntity.ok(response);
     }
+    
+    @PostMapping("/logout")
+    public ResponseEntity<Void> logout() {
+        // JWT is stateless — invalidation happens client-side by discarding the token.
+        return ResponseEntity.noContent().build();
+    }
 }

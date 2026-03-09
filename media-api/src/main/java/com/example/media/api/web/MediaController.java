@@ -1,14 +1,18 @@
 package com.example.media.api.web;
 
 import com.example.media.api.domain.Media;
+import com.example.media.api.domain.Rendition;
 import com.example.media.api.repo.MediaRepository;
 import com.example.media.api.repo.ProcessingJobRepository;
 import com.example.media.api.repo.RenditionRepository;
 import com.example.media.common.events.MediaUploadedEvent;
 import com.example.media.common.kafka.Topics;
 import com.example.media.common.model.MediaType;
+import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
+import io.minio.RemoveObjectArgs;
+import io.minio.http.Method;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -23,8 +27,11 @@ import java.io.InputStream;
 import java.net.URLConnection;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/media")
@@ -57,6 +64,23 @@ public class MediaController {
 
     public record InitUploadRequest(String title, String type, String filename, String contentType) {}
     public record InitUploadResponse(UUID mediaId, String objectKey) {}
+
+    // ── 1. List all my media ──────────────────────────────────────────────────
+    @GetMapping
+    public List<Map<String, Object>> listMyMedia(@AuthenticationPrincipal UUID userId) {
+        return mediaRepository.findByOwnerId(userId).stream()
+                .map(m -> {
+                    Map<String, Object> item = new java.util.LinkedHashMap<>();
+                    item.put("id", m.getId());
+                    item.put("title", m.getTitle());
+                    item.put("type", m.getType());
+                    item.put("status", m.getStatus());
+                    item.put("createdAt", m.getCreatedAt());
+                    item.put("updatedAt", m.getUpdatedAt());
+                    return item;
+                })
+                .collect(Collectors.toList());
+    }
 
     @PostMapping("/init-upload")
     @Transactional
@@ -127,25 +151,102 @@ public class MediaController {
         return Map.of("status", "PROCESSING");
     }
 
+    // ── 2. Delete media ───────────────────────────────────────────────────────
+    @DeleteMapping("/{mediaId}")
+    @Transactional
+    public Map<String, String> deleteMedia(@AuthenticationPrincipal UUID userId,
+                                           @PathVariable("mediaId") UUID mediaId) throws Exception {
+        Media m = loadOwnedMedia(userId, mediaId);
+
+        // Remove raw file from MinIO
+        if (m.getRawObjectKey() != null) {
+            minioClient.removeObject(RemoveObjectArgs.builder()
+                    .bucket(bucket).object(m.getRawObjectKey()).build());
+        }
+
+        // Remove each rendition manifest from MinIO
+        List<Rendition> renditions = renditionRepository.findByMediaId(mediaId);
+        for (Rendition r : renditions) {
+            minioClient.removeObject(RemoveObjectArgs.builder()
+                    .bucket(bucket).object(r.getManifestKey()).build());
+        }
+
+        // Delete media row — DB cascades to renditions and processing_jobs
+        mediaRepository.deleteById(mediaId);
+        return Map.of("status", "deleted");
+    }
+
+    // ── 3. Update media metadata ──────────────────────────────────────────────
+    public record UpdateMetadataRequest(String title) {}
+
+    @PatchMapping("/{mediaId}")
+    @Transactional
+    public Map<String, Object> updateMetadata(@AuthenticationPrincipal UUID userId,
+                                              @PathVariable("mediaId") UUID mediaId,
+                                              @RequestBody UpdateMetadataRequest req) {
+        Media m = loadOwnedMedia(userId, mediaId);
+        if (req.title() != null && !req.title().isBlank()) {
+            m.setTitle(req.title());
+        }
+        m.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
+        mediaRepository.save(m);
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("id", m.getId());
+        result.put("title", m.getTitle());
+        result.put("type", m.getType());
+        result.put("status", m.getStatus());
+        result.put("updatedAt", m.getUpdatedAt());
+        return result;
+    }
+
+    // ── 4. Download original file ─────────────────────────────────────────────
+    @GetMapping("/{mediaId}/download")
+    public Map<String, String> download(@AuthenticationPrincipal UUID userId,
+                                        @PathVariable("mediaId") UUID mediaId) throws Exception {
+        Media m = loadOwnedMedia(userId, mediaId);
+        if (m.getRawObjectKey() == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Original file not available");
+        }
+        String url = minioClient.getPresignedObjectUrl(
+                GetPresignedObjectUrlArgs.builder()
+                        .method(Method.GET)
+                        .bucket(bucket)
+                        .object(m.getRawObjectKey())
+                        .expiry(1, TimeUnit.HOURS)
+                        .build());
+        return Map.of("downloadUrl", url);
+    }
+
+    // ── 5. View rendition details ─────────────────────────────────────────────
+    @GetMapping("/{mediaId}/renditions")
+    public List<Map<String, Object>> renditions(@AuthenticationPrincipal UUID userId,
+                                                @PathVariable("mediaId") UUID mediaId) {
+        loadOwnedMedia(userId, mediaId); // ownership check
+        return renditionRepository.findByMediaId(mediaId).stream()
+                .map(r -> {
+                    Map<String, Object> item = new java.util.LinkedHashMap<>();
+                    item.put("id", r.getId());
+                    item.put("quality", r.getQuality());
+                    item.put("codec", r.getCodec());
+                    item.put("bitrateKbps", r.getBitrateKbps());
+                    item.put("manifestKey", r.getManifestKey());
+                    return item;
+                })
+                .collect(Collectors.toList());
+    }
+
     private static String inferContentType(Media media, String filename, String requestContentType) {
         if (requestContentType != null && !requestContentType.isBlank()) {
             return requestContentType;
         }
-
         String guessed = filename == null ? null : URLConnection.guessContentTypeFromName(filename);
         if (guessed != null && !guessed.isBlank()) {
             return guessed;
         }
-
-        // Conservative defaults if we can't infer reliably.
         if (media != null) {
             String type = media.getType();
-            if ("AUDIO".equalsIgnoreCase(type)) {
-                return "audio/mpeg";
-            }
-            if ("VIDEO".equalsIgnoreCase(type)) {
-                return "video/mp4";
-            }
+            if ("AUDIO".equalsIgnoreCase(type)) return "audio/mpeg";
+            if ("VIDEO".equalsIgnoreCase(type)) return "video/mp4";
         }
         return "application/octet-stream";
     }
@@ -159,7 +260,6 @@ public class MediaController {
         result.put("title", m.getTitle());
         result.put("type", m.getType());
         result.put("status", m.getStatus());
-
         String message = switch (m.getStatus()) {
             case "READY" -> "Uploaded successfully";
             case "FAILED" -> "Processing failed";
@@ -168,7 +268,6 @@ public class MediaController {
             default -> m.getStatus();
         };
         result.put("message", message);
-
         result.put("stage", job.map(j -> j.getStage()).orElse(null));
         result.put("progress", job.map(j -> j.getProgress()).orElse(null));
         result.put("error", job.map(j -> j.getErrorMessage()).orElse(null));
@@ -187,7 +286,8 @@ public class MediaController {
     }
 
     private Media loadOwnedMedia(UUID userId, UUID mediaId) {
-        Media m = mediaRepository.findById(mediaId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        Media m = mediaRepository.findById(mediaId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
         if (!userId.equals(m.getOwnerId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN);
         }

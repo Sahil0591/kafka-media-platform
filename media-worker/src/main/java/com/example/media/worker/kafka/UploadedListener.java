@@ -15,6 +15,9 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,6 +30,8 @@ import java.util.UUID;
 
 @Component
 public class UploadedListener {
+    private static final Logger log = LoggerFactory.getLogger(UploadedListener.class);
+
     private final JdbcTemplate jdbc;
     private final TranscodeService transcodeService;
     private final KafkaTemplate<String, Object> kafkaTemplate;
@@ -45,9 +50,16 @@ public class UploadedListener {
     public void onUploaded(MediaUploadedEvent evt) {
         String mediaId = evt.mediaId();
         try {
-            // Skip if already READY
-            var status = jdbc.queryForObject("select status from media where id = ?", String.class, UUID.fromString(mediaId));
-            if ("READY".equals(status)) return;
+            // Atomic idempotency: only proceed if status is PROCESSING (set by API).
+            // If already READY or being processed by another consumer, skip.
+            int claimed = jdbc.update(
+                    "UPDATE media SET status = 'PROCESSING', updated_at = now() AT TIME ZONE 'utc' " +
+                    "WHERE id = ? AND status = 'PROCESSING'",
+                    UUID.fromString(mediaId));
+            if (claimed == 0) {
+                log.info("Skipping media {} — already processed or not in PROCESSING state", mediaId);
+                return;
+            }
 
             UUID jobId = UUID.randomUUID();
             jdbc.update("insert into processing_jobs(id, media_id, stage, status, progress, started_at) values (?,?,?,?,?,?)",

@@ -134,6 +134,10 @@ public class MediaController {
     @PutMapping(path = "/{mediaId}/upload", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Object> upload(@AuthenticationPrincipal UUID userId, @PathVariable("mediaId") UUID mediaId, @RequestParam("file") MultipartFile file) throws Exception {
         Media m = loadOwnedMedia(userId, mediaId);
+        if (!"UPLOADING".equals(m.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Media is in " + m.getStatus() + " state - file upload only allowed in UPLOADING state");
+        }
         String key = m.getRawObjectKey();
         try (InputStream in = file.getInputStream()) {
             PutObjectArgs args = PutObjectArgs.builder()

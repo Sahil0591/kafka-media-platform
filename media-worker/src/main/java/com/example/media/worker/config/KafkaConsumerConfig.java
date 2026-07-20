@@ -94,6 +94,9 @@ public class KafkaConsumerConfig {
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(dltConsumerFactory);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.RECORD);
+        // No retries on DLT - this is the end of the line. Zero maxAttempts
+        // means log-and-skip, preventing infinite retry loops or routing to DLT.DLT.
+        factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(0L, 0L)));
         return factory;
     }
 }

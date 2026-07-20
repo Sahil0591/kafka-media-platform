@@ -53,6 +53,7 @@ public class MediaController {
     private final MinioClient minioClient;
     private final String bucket;
     private final String publicBaseUrl;
+    private final String minioEndpoint;
 
     public MediaController(MediaRepository mediaRepository,
                            ProcessingJobRepository jobRepository,
@@ -60,7 +61,8 @@ public class MediaController {
                            KafkaTemplate<String, Object> kafkaTemplate,
                            MinioClient minioClient,
                            @Value("${app.minio.bucket}") String bucket,
-                           @Value("${app.public-base-url}") String publicBaseUrl) {
+                           @Value("${app.public-base-url}") String publicBaseUrl,
+                           @Value("${app.minio.endpoint}") String minioEndpoint) {
         this.mediaRepository = mediaRepository;
         this.jobRepository = jobRepository;
         this.renditionRepository = renditionRepository;
@@ -68,6 +70,7 @@ public class MediaController {
         this.minioClient = minioClient;
         this.bucket = bucket;
         this.publicBaseUrl = publicBaseUrl;
+        this.minioEndpoint = minioEndpoint;
     }
 
     public record InitUploadRequest(String title, String type, String filename, String contentType) {}
@@ -93,6 +96,19 @@ public class MediaController {
     @PostMapping("/init-upload")
     @Transactional
     public InitUploadResponse initUpload(@AuthenticationPrincipal UUID userId, @RequestBody InitUploadRequest req) {
+        if (req.title() == null || req.title().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "title is required");
+        }
+        if (req.filename() == null || req.filename().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "filename is required");
+        }
+        try {
+            MediaType.valueOf(req.type());
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "type must be one of: VIDEO, AUDIO");
+        }
+
         UUID id = UUID.randomUUID();
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         Media m = new Media();
@@ -292,9 +308,9 @@ public class MediaController {
         Media m = loadOwnedMedia(userId, mediaId);
         String hlsKey = m.getHlsMasterManifestKey();
         if (hlsKey == null) {
-            throw new IllegalStateException("Media not ready");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Media is not ready for playback");
         }
-        String url = "http://localhost:9000/" + bucket + "/" + hlsKey;
+        String url = minioEndpoint + "/" + bucket + "/" + hlsKey;
         return Map.of("hlsUrl", url);
     }
 

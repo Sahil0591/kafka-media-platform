@@ -3,21 +3,32 @@ package com.example.media.worker.service;
 import com.example.media.common.model.MediaType;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
+import java.util.function.IntConsumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class TranscodeService {
+
+    private static final Logger log = LoggerFactory.getLogger(TranscodeService.class);
+    private static final Pattern TIME_PATTERN = Pattern.compile("time=(\\d{2}):(\\d{2}):(\\d{2})\\.(\\d{2})");
+
     private final MinioClient minioClient;
     private final String bucket;
 
@@ -26,23 +37,34 @@ public class TranscodeService {
         this.bucket = bucket;
     }
 
-    public record HlsOutput(String masterKey, List<String> variantKeys) {}
+    public record HlsOutput(String masterKey, List<String> variantKeys, int durationSeconds) {}
 
-    /**
-     * Transcode input media to HLS. For VIDEO, generate 720p and 480p variants.
-     * For AUDIO, generate a single audio-only HLS playlist.
-     */
-    public HlsOutput transcodeToHls(Path input, String mediaId, MediaType type) throws IOException, InterruptedException {
+    @FunctionalInterface
+    public interface ProgressCallback {
+        void onProgress(int percent, String stage);
+    }
+
+    public HlsOutput transcodeToHls(Path input, String mediaId, MediaType type, ProgressCallback progress)
+            throws IOException, InterruptedException {
         if (type == MediaType.AUDIO) {
-            return transcodeAudioToHls(input, mediaId);
+            return transcodeAudioToHls(input, mediaId, progress);
         }
 
         Path work = Files.createTempDirectory("hls-" + mediaId + "-");
         try {
             Path master = work.resolve("master.m3u8");
 
-            int r720 = runFfmpeg(input, work.resolve("720p"), 1280, 720, 3000, 128);
-            int r480 = runFfmpeg(input, work.resolve("480p"), 854, 480, 1500, 96);
+            // Probe duration for progress calculation
+            int duration = probeDuration(input);
+
+            progress.onProgress(0, "Transcoding 720p");
+            int r720 = runFfmpeg(input, work.resolve("720p"), 1280, 720, 3000, 128, duration,
+                    pct -> progress.onProgress(pct / 2, "Transcoding 720p"));
+
+            progress.onProgress(50, "Transcoding 480p");
+            int r480 = runFfmpeg(input, work.resolve("480p"), 854, 480, 1500, 96, duration,
+                    pct -> progress.onProgress(50 + pct / 2, "Transcoding 480p"));
+
             if (r720 != 0 || r480 != 0) throw new RuntimeException("ffmpeg failed");
 
             String masterContent = "#EXTM3U\n" +
@@ -52,23 +74,37 @@ public class TranscodeService {
             Files.writeString(master, masterContent);
 
             String base = "hls/" + mediaId + "/";
+            progress.onProgress(95, "Uploading to storage");
             upload(master.toFile(), base + "master.m3u8");
             uploadDir(work.resolve("720p"), base + "720p/");
             uploadDir(work.resolve("480p"), base + "480p/");
 
-            return new HlsOutput(base + "master.m3u8", List.of(base + "720p/index.m3u8", base + "480p/index.m3u8"));
+            return new HlsOutput(base + "master.m3u8",
+                    List.of(base + "720p/index.m3u8", base + "480p/index.m3u8"),
+                    duration);
         } finally {
             deleteDirectory(work);
         }
     }
 
-    private HlsOutput transcodeAudioToHls(Path input, String mediaId) throws IOException, InterruptedException {
+    // Overload without progress callback for backward compatibility
+    public HlsOutput transcodeToHls(Path input, String mediaId, MediaType type)
+            throws IOException, InterruptedException {
+        return transcodeToHls(input, mediaId, type, (pct, stage) -> {});
+    }
+
+    private HlsOutput transcodeAudioToHls(Path input, String mediaId, ProgressCallback progress)
+            throws IOException, InterruptedException {
         Path work = Files.createTempDirectory("hls-audio-" + mediaId + "-");
         try {
             Path master = work.resolve("master.m3u8");
             Path audioDir = work.resolve("audio");
 
-            int r = runFfmpegAudio(input, audioDir, 192);
+            int duration = probeDuration(input);
+
+            progress.onProgress(0, "Transcoding audio");
+            int r = runFfmpegAudio(input, audioDir, 192, duration,
+                    pct -> progress.onProgress(pct, "Transcoding audio"));
             if (r != 0) throw new RuntimeException("ffmpeg (audio) failed");
 
             String masterContent = "#EXTM3U\n" +
@@ -78,24 +114,38 @@ public class TranscodeService {
             Files.writeString(master, masterContent);
 
             String base = "hls/" + mediaId + "/";
+            progress.onProgress(95, "Uploading to storage");
             upload(master.toFile(), base + "master.m3u8");
             uploadDir(audioDir, base + "audio/");
 
-            return new HlsOutput(base + "master.m3u8", List.of(base + "audio/index.m3u8"));
+            return new HlsOutput(base + "master.m3u8", List.of(base + "audio/index.m3u8"), duration);
         } finally {
             deleteDirectory(work);
         }
     }
 
-    private int runFfmpeg(Path input, Path outDir, int w, int h, int videoKbps, int audioKbps) throws IOException, InterruptedException {
+    private int probeDuration(Path input) {
+        try {
+            String[] cmd = {"bash", "-lc",
+                    "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 " + shell(input.toString())};
+            Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+            String output = new String(p.getInputStream().readAllBytes()).trim();
+            p.waitFor();
+            return (int) Double.parseDouble(output);
+        } catch (Exception e) {
+            log.warn("Could not probe duration, progress will be approximate: {}", e.getMessage());
+            return 0;
+        }
+    }
+
+    private int runFfmpeg(Path input, Path outDir, int w, int h, int videoKbps, int audioKbps,
+                          int totalDuration, IntConsumer progressPct) throws IOException, InterruptedException {
         Files.createDirectories(outDir);
         String[] cmd = {
                 "bash", "-lc",
                 String.join(" ",
-                        "ffmpeg -y -i", shell(input.toString()),
-                        // --- FIX: Add pad filter to ensure even dimensions ---
+                        "ffmpeg -y -progress pipe:2 -i", shell(input.toString()),
                         "-vf", shell("scale=w=" + w + ":h=" + h + ":force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2"),
-                        // ----------------------------------------------------
                         "-c:v h264 -preset veryfast -crf 22 -b:v " + videoKbps + "k",
                         "-c:a aac -b:a " + audioKbps + "k",
                         "-hls_time 4 -hls_playlist_type vod",
@@ -103,25 +153,47 @@ public class TranscodeService {
                         shell(outDir.resolve("index.m3u8").toString())
                 )
         };
-        Process p = new ProcessBuilder(cmd).inheritIO().start();
+        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        parseProgress(p, totalDuration, progressPct);
         return p.waitFor();
     }
 
-    private int runFfmpegAudio(Path input, Path outDir, int audioKbps) throws IOException, InterruptedException {
+    private int runFfmpegAudio(Path input, Path outDir, int audioKbps,
+                               int totalDuration, IntConsumer progressPct) throws IOException, InterruptedException {
         Files.createDirectories(outDir);
         String[] cmd = {
                 "bash", "-lc",
                 String.join(" ",
-                        "ffmpeg -y -i", shell(input.toString()),
-                        "-vn", // no video, audio only
+                        "ffmpeg -y -progress pipe:2 -i", shell(input.toString()),
+                        "-vn",
                         "-c:a aac -b:a " + audioKbps + "k",
                         "-hls_time 4 -hls_playlist_type vod",
                         "-hls_segment_filename", shell(outDir.resolve("segment%03d.ts").toString()),
                         shell(outDir.resolve("index.m3u8").toString())
                 )
         };
-        Process p = new ProcessBuilder(cmd).inheritIO().start();
+        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        parseProgress(p, totalDuration, progressPct);
         return p.waitFor();
+    }
+
+    private void parseProgress(Process p, int totalDuration, IntConsumer progressPct) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (totalDuration <= 0) continue;
+                Matcher m = TIME_PATTERN.matcher(line);
+                if (m.find()) {
+                    int seconds = Integer.parseInt(m.group(1)) * 3600
+                            + Integer.parseInt(m.group(2)) * 60
+                            + Integer.parseInt(m.group(3));
+                    int pct = Math.min(100, (int) ((seconds * 100L) / totalDuration));
+                    progressPct.accept(pct);
+                }
+            }
+        } catch (IOException e) {
+            log.warn("Error reading ffmpeg output: {}", e.getMessage());
+        }
     }
 
     private void uploadDir(Path dir, String baseKey) throws IOException {

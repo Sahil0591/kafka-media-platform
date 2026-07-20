@@ -2,10 +2,12 @@ package com.example.media.worker.kafka;
 
 import com.example.media.common.events.MediaFailedEvent;
 import com.example.media.common.events.MediaProcessedEvent;
+import com.example.media.common.events.MediaTranscodeProgressEvent;
 import com.example.media.common.events.MediaUploadedEvent;
 import com.example.media.common.events.RenditionDto;
 import com.example.media.common.kafka.Topics;
 import com.example.media.common.model.MediaType;
+import com.example.media.common.model.ProcessingStage;
 import com.example.media.worker.service.TranscodeService;
 import io.minio.MinioClient;
 import io.minio.GetObjectArgs;
@@ -78,7 +80,12 @@ public class UploadedListener {
                 Files.copy(stream, tmp, StandardCopyOption.REPLACE_EXISTING);
             }
 
-            var out = transcodeService.transcodeToHls(tmp, mediaId, evt.type());
+            final UUID progressJobId = jobId;
+            var out = transcodeService.transcodeToHls(tmp, mediaId, evt.type(), (pct, stage) -> {
+                kafkaTemplate.send(Topics.MEDIA_TRANSCODE_PROGRESS, mediaId,
+                        new MediaTranscodeProgressEvent(mediaId, ProcessingStage.TRANSCODE, pct, stage, Instant.now()));
+                jdbc.update("UPDATE processing_jobs SET progress = ? WHERE id = ?", pct, progressJobId);
+            });
 
             // Update media to READY
             jdbc.update("UPDATE media SET status = ?, hls_master_manifest_key = ?, updated_at = now() AT TIME ZONE 'utc' WHERE id = ?",
@@ -104,14 +111,14 @@ public class UploadedListener {
             }
 
             kafkaTemplate.send(Topics.MEDIA_PROCESSED, mediaId,
-                    new MediaProcessedEvent(mediaId, "READY", out.masterKey(), renditions, null, Instant.now()));
+                    new MediaProcessedEvent(mediaId, "READY", out.masterKey(), renditions, out.durationSeconds(), Instant.now()));
 
             log.info("Media {} processed successfully", mediaId);
         } catch (Exception e) {
             log.error("Processing failed for media {}", mediaId, e);
 
             kafkaTemplate.send(Topics.MEDIA_FAILED, mediaId,
-                    new MediaFailedEvent(mediaId, com.example.media.common.model.ProcessingStage.TRANSCODE,
+                    new MediaFailedEvent(mediaId, ProcessingStage.TRANSCODE,
                             "ERROR", e.getMessage(), Instant.now()));
 
             jdbc.update("UPDATE media SET status = ?, updated_at = now() AT TIME ZONE 'utc' WHERE id = ?",

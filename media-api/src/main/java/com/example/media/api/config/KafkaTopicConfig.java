@@ -24,7 +24,7 @@ public class KafkaTopicConfig {
         TopicBuilder builder = TopicBuilder.name(name)
                 .partitions(partitions)
                 .replicas(replicas);
-        if (minInsyncReplicas != null) {
+        if (minInsyncReplicas != null && !minInsyncReplicas.isBlank()) {
             builder.config("min.insync.replicas", minInsyncReplicas);
         }
         return builder.build();

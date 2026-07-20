@@ -38,8 +38,10 @@ public class KafkaConsumerConfig {
         props.put(ConsumerConfig.GROUP_ID_CONFIG, "media-worker");
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
-        // Transcoding can take minutes - allow up to 30 min before broker considers consumer dead
-        props.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 1_800_000);
+        // Video transcoding runs two sequential ffmpeg processes (720p + 480p), each
+        // with a 25-min watchdog. Worst case is ~50 min, so allow 60 min before the
+        // broker considers the consumer dead.
+        props.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 3_600_000);
         // Only fetch 1 record per poll since each transcode takes minutes
         props.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 1);
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);

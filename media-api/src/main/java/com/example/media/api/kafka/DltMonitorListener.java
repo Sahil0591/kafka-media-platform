@@ -9,14 +9,17 @@ import org.springframework.stereotype.Component;
 /**
  * Consumes dead-letter topic messages and logs them at ERROR level so they
  * surface in monitoring/alerting systems rather than accumulating silently.
+ * Uses a dedicated StringDeserializer factory to read any DLT payload
+ * regardless of the original message type.
  */
 @Component
 public class DltMonitorListener {
 
     private static final Logger log = LoggerFactory.getLogger(DltMonitorListener.class);
 
-    @KafkaListener(topics = {"media.processed.DLT", "media.failed.DLT"}, groupId = "media-api-dlt")
-    public void onDlt(ConsumerRecord<String, Object> record) {
+    @KafkaListener(topics = {"media.processed.DLT", "media.failed.DLT"}, groupId = "media-api-dlt",
+            containerFactory = "dltKafkaListenerContainerFactory")
+    public void onDlt(ConsumerRecord<String, String> record) {
         log.error("DLT message received - topic={} key={} value={} headers={}",
                 record.topic(), record.key(), record.value(), record.headers());
     }

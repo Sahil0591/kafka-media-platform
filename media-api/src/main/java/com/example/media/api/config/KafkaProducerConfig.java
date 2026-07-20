@@ -30,6 +30,9 @@ public class KafkaProducerConfig {
         // delivery.timeout.ms bounds total retry duration instead.
         configProps.put(ProducerConfig.ACKS_CONFIG, "all");
         configProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        // request.timeout = 10s, delivery.timeout = 30s gives ~2 retry attempts
+        // within the delivery budget instead of zero retries when both are 30s
+        configProps.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 10_000);
         configProps.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 30_000);
 
         configProps.put("spring.json.add.type.headers", false);

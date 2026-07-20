@@ -29,6 +29,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 @Component
 public class UploadedListener {
@@ -83,8 +84,13 @@ public class UploadedListener {
 
             final UUID progressJobId = jobId;
             var out = transcodeService.transcodeToHls(tmp, mediaId, evt.type(), (pct, stage) -> {
-                kafkaTemplate.send(Topics.MEDIA_TRANSCODE_PROGRESS, mediaId,
-                        new MediaTranscodeProgressEvent(mediaId, ProcessingStage.TRANSCODE, pct, stage, Instant.now()));
+                // Progress events are non-critical; never stall transcoding on broker issues
+                try {
+                    kafkaTemplate.send(Topics.MEDIA_TRANSCODE_PROGRESS, mediaId,
+                            new MediaTranscodeProgressEvent(mediaId, ProcessingStage.TRANSCODE, pct, stage, Instant.now()));
+                } catch (Exception ex) {
+                    log.debug("Failed to send progress event for media {}: {}", mediaId, ex.getMessage());
+                }
                 jdbc.update("UPDATE processing_jobs SET progress = ? WHERE id = ?", pct, progressJobId);
             });
 
@@ -111,16 +117,32 @@ public class UploadedListener {
                         UUID.randomUUID(), mediaUuid, r.quality(), r.manifestKey());
             }
 
+            // Synchronous send - if the broker is unreachable, this throws and
+            // the catch block will mark the media as FAILED rather than leaving
+            // the DB saying READY with no event ever published.
             kafkaTemplate.send(Topics.MEDIA_PROCESSED, mediaId,
-                    new MediaProcessedEvent(mediaId, "READY", out.masterKey(), renditions, out.durationSeconds(), Instant.now()));
+                    new MediaProcessedEvent(mediaId, "READY", out.masterKey(), renditions, out.durationSeconds(), Instant.now()))
+                    .get(30, TimeUnit.SECONDS);
 
             log.info("Media {} processed successfully", mediaId);
         } catch (Exception e) {
+            // Re-interrupt the thread if shutdown was requested so the consumer
+            // container can terminate cleanly instead of hanging until
+            // max.poll.interval.ms expires.
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+
             log.error("Processing failed for media {}", mediaId, e);
 
-            kafkaTemplate.send(Topics.MEDIA_FAILED, mediaId,
-                    new MediaFailedEvent(mediaId, ProcessingStage.TRANSCODE,
-                            "ERROR", e.getMessage(), Instant.now()));
+            try {
+                kafkaTemplate.send(Topics.MEDIA_FAILED, mediaId,
+                        new MediaFailedEvent(mediaId, ProcessingStage.TRANSCODE,
+                                "ERROR", e.getMessage(), Instant.now()))
+                        .get(30, TimeUnit.SECONDS);
+            } catch (Exception sendEx) {
+                log.error("Failed to publish media.failed event for {}", mediaId, sendEx);
+            }
 
             jdbc.update("UPDATE media SET status = ?, updated_at = now() AT TIME ZONE 'utc' WHERE id = ?",
                     "FAILED", mediaUuid);

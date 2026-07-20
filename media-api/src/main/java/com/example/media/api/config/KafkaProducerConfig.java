@@ -25,10 +25,11 @@ public class KafkaProducerConfig {
         configProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
         configProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
 
-        // Delivery guarantees: all ISRs must ack, idempotent producer avoids duplicates
+        // Delivery guarantees: all ISRs must ack, idempotent producer avoids duplicates.
+        // Retries default to Integer.MAX_VALUE with idempotence enabled;
+        // delivery.timeout.ms bounds total retry duration instead.
         configProps.put(ProducerConfig.ACKS_CONFIG, "all");
         configProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
-        configProps.put(ProducerConfig.RETRIES_CONFIG, 3);
         configProps.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 30_000);
 
         configProps.put("spring.json.add.type.headers", false);

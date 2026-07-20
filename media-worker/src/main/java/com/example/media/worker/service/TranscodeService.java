@@ -197,13 +197,15 @@ public class TranscodeService {
     }
 
     private void uploadDir(Path dir, String baseKey) throws IOException {
-        Files.list(dir).forEach(path -> {
-            try {
-                upload(path.toFile(), baseKey + path.getFileName());
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        });
+        try (var entries = Files.list(dir)) {
+            entries.forEach(path -> {
+                try {
+                    upload(path.toFile(), baseKey + path.getFileName());
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+        }
     }
 
     private void upload(File file, String key) throws IOException {

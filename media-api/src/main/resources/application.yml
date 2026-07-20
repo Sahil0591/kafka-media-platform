@@ -29,6 +29,12 @@ app:
     access-key: ${APP_MINIO_ACCESS_KEY:minioadmin}
     secret-key: ${APP_MINIO_SECRET_KEY:minioadmin}
     bucket: ${APP_MINIO_BUCKET:media}
+  kafka:
+    topic:
+      partitions: ${APP_KAFKA_TOPIC_PARTITIONS:3}
+      replicas: ${APP_KAFKA_TOPIC_REPLICAS:1}
+      # Set min-insync-replicas when replicas > 1 (e.g. 2 for prod with replicas=3)
+      min-insync-replicas: ${APP_KAFKA_TOPIC_MIN_INSYNC_REPLICAS:}
   jwt:
     secret: ${APP_JWT_SECRET:your-secret-key-must-be-at-least-256-bits-long-for-hs256-algorithm}
     expiration: ${APP_JWT_EXPIRATION:86400000} # 24 hours

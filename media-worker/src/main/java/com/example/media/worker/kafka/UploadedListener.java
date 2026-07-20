@@ -91,14 +91,18 @@ public class UploadedListener {
 
             final UUID progressJobId = jobId;
             var out = transcodeService.transcodeToHls(tmp, mediaId, evt.type(), (pct, stage) -> {
-                // Progress events are non-critical; never stall transcoding on broker issues
+                // Progress updates are non-critical; never stall transcoding on broker or DB issues
                 try {
                     kafkaTemplate.send(Topics.MEDIA_TRANSCODE_PROGRESS, mediaId,
                             new MediaTranscodeProgressEvent(mediaId, ProcessingStage.TRANSCODE, pct, stage, Instant.now()));
                 } catch (Exception ex) {
                     log.debug("Failed to send progress event for media {}: {}", mediaId, ex.getMessage());
                 }
-                jdbc.update("UPDATE processing_jobs SET progress = ? WHERE id = ?", pct, progressJobId);
+                try {
+                    jdbc.update("UPDATE processing_jobs SET progress = ? WHERE id = ?", pct, progressJobId);
+                } catch (Exception ex) {
+                    log.debug("Failed to update progress for job {}: {}", progressJobId, ex.getMessage());
+                }
             });
 
             // Build renditions list before publishing the event

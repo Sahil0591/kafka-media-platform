@@ -56,13 +56,14 @@ public class UploadedListener {
         Path tmp = null;
 
         try {
-            // Atomic idempotency: only proceed if status is PROCESSING (set by API).
+            // Atomic CAS: claim this media by transitioning PROCESSING → TRANSCODING.
+            // Only one consumer wins; duplicates see 0 rows updated and skip.
             int claimed = jdbc.update(
-                    "UPDATE media SET status = 'PROCESSING', updated_at = now() AT TIME ZONE 'utc' " +
+                    "UPDATE media SET status = 'TRANSCODING', updated_at = now() AT TIME ZONE 'utc' " +
                     "WHERE id = ? AND status = 'PROCESSING'",
                     mediaUuid);
             if (claimed == 0) {
-                log.info("Skipping media {} — already processed or not in PROCESSING state", mediaId);
+                log.info("Skipping media {} — not in PROCESSING state (already claimed or completed)", mediaId);
                 return;
             }
 

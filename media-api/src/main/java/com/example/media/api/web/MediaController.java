@@ -292,7 +292,7 @@ public class MediaController {
         String message = switch (m.getStatus()) {
             case "READY" -> "Uploaded successfully";
             case "FAILED" -> "Processing failed";
-            case "PROCESSING" -> "Processing";
+            case "PROCESSING", "TRANSCODING" -> "Processing";
             case "UPLOADING" -> "Uploading";
             default -> m.getStatus();
         };

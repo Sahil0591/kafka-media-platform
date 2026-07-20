@@ -50,7 +50,7 @@ public class KafkaConsumerConfig {
         // Retry 3 times with 5-second backoff, then send to DLT
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaTemplate);
         DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, new FixedBackOff(5000L, 3L));
-        handler.setLogLevel(org.springframework.kafka.listener.KafkaException.Level.ERROR);
+        handler.setLogLevel(org.springframework.kafka.KafkaException.Level.ERROR);
         return handler;
     }
 

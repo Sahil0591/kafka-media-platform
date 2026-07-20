@@ -32,7 +32,6 @@ public class KafkaProducerConfig {
         configProps.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 30_000);
 
         configProps.put("spring.json.add.type.headers", false);
-        configProps.put("spring.json.trusted.packages", "com.example.media.*");
         return new DefaultKafkaProducerFactory<>(configProps);
     }
 

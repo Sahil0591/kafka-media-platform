@@ -23,6 +23,9 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.InputStream;
 import java.net.URLConnection;
 import java.time.OffsetDateTime;
@@ -37,6 +40,8 @@ import java.util.stream.Collectors;
 @RequestMapping("/api/media")
 @Validated
 public class MediaController {
+
+    private static final Logger log = LoggerFactory.getLogger(MediaController.class);
 
     private final MediaRepository mediaRepository;
     private final ProcessingJobRepository jobRepository;
@@ -120,7 +125,6 @@ public class MediaController {
     public record CompleteUploadRequest(String objectKey, String contentType) {}
 
     @PostMapping("/{mediaId}/complete-upload")
-    @Transactional
     public Map<String, String> completeUpload(@AuthenticationPrincipal UUID userId, @PathVariable("mediaId") UUID mediaId, @RequestBody CompleteUploadRequest req) {
         Media m = loadOwnedMedia(userId, mediaId);
         String storedKey = m.getRawObjectKey();
@@ -147,7 +151,17 @@ public class MediaController {
                 contentType,
                 java.time.Instant.now()
         );
-        kafkaTemplate.send(Topics.MEDIA_UPLOADED, mediaId.toString(), evt);
+
+        try {
+            kafkaTemplate.send(Topics.MEDIA_UPLOADED, mediaId.toString(), evt).get(10, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.error("Kafka send failed for media {}, rolling back to UPLOADING", mediaId, e);
+            m.setStatus("UPLOADING");
+            m.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
+            mediaRepository.save(m);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Failed to queue processing — please retry");
+        }
         return Map.of("status", "PROCESSING");
     }
 

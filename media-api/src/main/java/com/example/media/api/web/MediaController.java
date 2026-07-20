@@ -9,10 +9,13 @@ import com.example.media.common.events.MediaUploadedEvent;
 import com.example.media.common.kafka.Topics;
 import com.example.media.common.model.MediaType;
 import io.minio.GetPresignedObjectUrlArgs;
+import io.minio.ListObjectsArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
+import io.minio.Result;
 import io.minio.http.Method;
+import io.minio.messages.Item;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -178,12 +181,8 @@ public class MediaController {
                     .bucket(bucket).object(m.getRawObjectKey()).build());
         }
 
-        // Remove each rendition manifest from MinIO
-        List<Rendition> renditions = renditionRepository.findByMediaId(mediaId);
-        for (Rendition r : renditions) {
-            minioClient.removeObject(RemoveObjectArgs.builder()
-                    .bucket(bucket).object(r.getManifestKey()).build());
-        }
+        // Remove all HLS objects (manifests + segments) recursively
+        deleteMinioPrefix("hls/" + mediaId + "/");
 
         // Delete media row — DB cascades to renditions and processing_jobs
         mediaRepository.deleteById(mediaId);
@@ -306,5 +305,18 @@ public class MediaController {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN);
         }
         return m;
+    }
+
+    private void deleteMinioPrefix(String prefix) {
+        Iterable<Result<Item>> objects = minioClient.listObjects(
+                ListObjectsArgs.builder().bucket(bucket).prefix(prefix).recursive(true).build());
+        for (Result<Item> result : objects) {
+            try {
+                minioClient.removeObject(RemoveObjectArgs.builder()
+                        .bucket(bucket).object(result.get().objectName()).build());
+            } catch (Exception e) {
+                log.warn("Failed to delete MinIO object under prefix '{}': {}", prefix, e.getMessage());
+            }
+        }
     }
 }

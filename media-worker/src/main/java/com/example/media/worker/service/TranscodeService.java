@@ -9,8 +9,11 @@ import org.springframework.stereotype.Service;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
 
 @Service
@@ -35,45 +38,53 @@ public class TranscodeService {
         }
 
         Path work = Files.createTempDirectory("hls-" + mediaId + "-");
-        Path master = work.resolve("master.m3u8");
+        try {
+            Path master = work.resolve("master.m3u8");
 
-        int r720 = runFfmpeg(input, work.resolve("720p"), 1280, 720, 3000, 128);
-        int r480 = runFfmpeg(input, work.resolve("480p"), 854, 480, 1500, 96);
-        if (r720 != 0 || r480 != 0) throw new RuntimeException("ffmpeg failed");
+            int r720 = runFfmpeg(input, work.resolve("720p"), 1280, 720, 3000, 128);
+            int r480 = runFfmpeg(input, work.resolve("480p"), 854, 480, 1500, 96);
+            if (r720 != 0 || r480 != 0) throw new RuntimeException("ffmpeg failed");
 
-        String masterContent = "#EXTM3U\n" +
-                "#EXT-X-VERSION:3\n" +
-                "#EXT-X-STREAM-INF:BANDWIDTH=3500000,RESOLUTION=1280x720\n720p/index.m3u8\n" +
-                "#EXT-X-STREAM-INF:BANDWIDTH=1800000,RESOLUTION=854x480\n480p/index.m3u8\n";
-        Files.writeString(master, masterContent);
+            String masterContent = "#EXTM3U\n" +
+                    "#EXT-X-VERSION:3\n" +
+                    "#EXT-X-STREAM-INF:BANDWIDTH=3500000,RESOLUTION=1280x720\n720p/index.m3u8\n" +
+                    "#EXT-X-STREAM-INF:BANDWIDTH=1800000,RESOLUTION=854x480\n480p/index.m3u8\n";
+            Files.writeString(master, masterContent);
 
-        String base = "hls/" + mediaId + "/";
-        upload(master.toFile(), base + "master.m3u8");
-        uploadDir(work.resolve("720p"), base + "720p/");
-        uploadDir(work.resolve("480p"), base + "480p/");
+            String base = "hls/" + mediaId + "/";
+            upload(master.toFile(), base + "master.m3u8");
+            uploadDir(work.resolve("720p"), base + "720p/");
+            uploadDir(work.resolve("480p"), base + "480p/");
 
-        return new HlsOutput(base + "master.m3u8", List.of(base + "720p/index.m3u8", base + "480p/index.m3u8"));
+            return new HlsOutput(base + "master.m3u8", List.of(base + "720p/index.m3u8", base + "480p/index.m3u8"));
+        } finally {
+            deleteDirectory(work);
+        }
     }
 
     private HlsOutput transcodeAudioToHls(Path input, String mediaId) throws IOException, InterruptedException {
         Path work = Files.createTempDirectory("hls-audio-" + mediaId + "-");
-        Path master = work.resolve("master.m3u8");
-        Path audioDir = work.resolve("audio");
+        try {
+            Path master = work.resolve("master.m3u8");
+            Path audioDir = work.resolve("audio");
 
-        int r = runFfmpegAudio(input, audioDir, 192);
-        if (r != 0) throw new RuntimeException("ffmpeg (audio) failed");
+            int r = runFfmpegAudio(input, audioDir, 192);
+            if (r != 0) throw new RuntimeException("ffmpeg (audio) failed");
 
-        String masterContent = "#EXTM3U\n" +
-                "#EXT-X-VERSION:3\n" +
-                "#EXT-X-STREAM-INF:BANDWIDTH=256000\n" +
-                "audio/index.m3u8\n";
-        Files.writeString(master, masterContent);
+            String masterContent = "#EXTM3U\n" +
+                    "#EXT-X-VERSION:3\n" +
+                    "#EXT-X-STREAM-INF:BANDWIDTH=256000\n" +
+                    "audio/index.m3u8\n";
+            Files.writeString(master, masterContent);
 
-        String base = "hls/" + mediaId + "/";
-        upload(master.toFile(), base + "master.m3u8");
-        uploadDir(audioDir, base + "audio/");
+            String base = "hls/" + mediaId + "/";
+            upload(master.toFile(), base + "master.m3u8");
+            uploadDir(audioDir, base + "audio/");
 
-        return new HlsOutput(base + "master.m3u8", List.of(base + "audio/index.m3u8"));
+            return new HlsOutput(base + "master.m3u8", List.of(base + "audio/index.m3u8"));
+        } finally {
+            deleteDirectory(work);
+        }
     }
 
     private int runFfmpeg(Path input, Path outDir, int w, int h, int videoKbps, int audioKbps) throws IOException, InterruptedException {
@@ -143,4 +154,21 @@ public class TranscodeService {
     }
 
     private static String shell(String s) { return '"' + s.replace("\"", "\\\"") + '"'; }
+
+    private static void deleteDirectory(Path dir) {
+        try {
+            Files.walkFileTree(dir, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                    Files.deleteIfExists(file);
+                    return FileVisitResult.CONTINUE;
+                }
+                @Override
+                public FileVisitResult postVisitDirectory(Path d, IOException exc) throws IOException {
+                    Files.deleteIfExists(d);
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException ignored) {}
+    }
 }

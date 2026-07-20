@@ -2,7 +2,6 @@ package com.example.media.worker.kafka;
 
 import com.example.media.common.events.MediaFailedEvent;
 import com.example.media.common.events.MediaProcessedEvent;
-import com.example.media.common.events.MediaTranscodeProgressEvent;
 import com.example.media.common.events.MediaUploadedEvent;
 import com.example.media.common.events.RenditionDto;
 import com.example.media.common.kafka.Topics;
@@ -91,13 +90,8 @@ public class UploadedListener {
 
             final UUID progressJobId = jobId;
             var out = transcodeService.transcodeToHls(tmp, mediaId, evt.type(), (pct, stage) -> {
-                // Progress updates are non-critical; never stall transcoding on broker or DB issues
-                try {
-                    kafkaTemplate.send(Topics.MEDIA_TRANSCODE_PROGRESS, mediaId,
-                            new MediaTranscodeProgressEvent(mediaId, ProcessingStage.TRANSCODE, pct, stage, Instant.now()));
-                } catch (Exception ex) {
-                    log.debug("Failed to send progress event for media {}: {}", mediaId, ex.getMessage());
-                }
+                // Progress tracked via DB only - no Kafka consumer exists for
+                // media.transcode.progress, so publishing there is wasted I/O.
                 try {
                     jdbc.update("UPDATE processing_jobs SET progress = ? WHERE id = ?", pct, progressJobId);
                 } catch (Exception ex) {
@@ -137,7 +131,8 @@ public class UploadedListener {
                         "ended_at = now() AT TIME ZONE 'utc' WHERE id = ?", finalJobId);
 
                 for (RenditionDto r : renditions) {
-                    jdbc.update("INSERT INTO renditions(id, media_id, quality, manifest_key) VALUES (?,?,?,?)",
+                    jdbc.update("INSERT INTO renditions(id, media_id, quality, manifest_key) " +
+                            "VALUES (?,?,?,?) ON CONFLICT (media_id, quality) DO NOTHING",
                             UUID.randomUUID(), mediaUuid, r.quality(), r.manifestKey());
                 }
             });

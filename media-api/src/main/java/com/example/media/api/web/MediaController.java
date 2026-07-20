@@ -109,6 +109,12 @@ public class MediaController {
                     "type must be one of: VIDEO, AUDIO");
         }
 
+        // Sanitize filename: strip path separators and traversal sequences
+        String safeFilename = req.filename().replaceAll("[/\\\\]", "_").replaceAll("\\.\\.", "_");
+        if (safeFilename.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "filename is invalid after sanitization");
+        }
+
         UUID id = UUID.randomUUID();
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         Media m = new Media();
@@ -117,7 +123,7 @@ public class MediaController {
         m.setTitle(req.title());
         m.setType(req.type());
         m.setStatus("UPLOADING");
-        String objectKey = "raw/" + id + "/" + req.filename();
+        String objectKey = "raw/" + id + "/" + safeFilename;
         m.setRawObjectKey(objectKey);
         m.setCreatedAt(now);
         m.setUpdatedAt(now);
@@ -146,6 +152,10 @@ public class MediaController {
     @PostMapping("/{mediaId}/complete-upload")
     public Map<String, String> completeUpload(@AuthenticationPrincipal UUID userId, @PathVariable("mediaId") UUID mediaId, @RequestBody CompleteUploadRequest req) {
         Media m = loadOwnedMedia(userId, mediaId);
+        if (!"UPLOADING".equals(m.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Media is in " + m.getStatus() + " state - only UPLOADING media can be completed");
+        }
         String storedKey = m.getRawObjectKey();
         if (storedKey == null || storedKey.isBlank()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Upload not initialized");

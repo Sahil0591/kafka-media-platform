@@ -1,0 +1,6 @@
+# Production overrides - activate with SPRING_PROFILES_ACTIVE=prod
+app:
+  kafka:
+    topic:
+      replicas: 3
+      min-insync-replicas: 2

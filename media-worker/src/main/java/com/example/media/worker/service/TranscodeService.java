@@ -19,6 +19,9 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.IntConsumer;
 import java.util.regex.Matcher;
@@ -160,14 +163,7 @@ public class TranscodeService {
                         shell(outDir.resolve("index.m3u8").toString())
                 )
         };
-        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
-        parseProgress(p, totalDuration, progressPct);
-        if (!p.waitFor(FFMPEG_TIMEOUT_MINUTES, TimeUnit.MINUTES)) {
-            log.error("ffmpeg video transcode timed out after {} minutes, destroying process", FFMPEG_TIMEOUT_MINUTES);
-            p.destroyForcibly();
-            throw new RuntimeException("ffmpeg timed out after " + FFMPEG_TIMEOUT_MINUTES + " minutes");
-        }
-        return p.exitValue();
+        return runWithWatchdog(cmd, totalDuration, progressPct);
     }
 
     private int runFfmpegAudio(Path input, Path outDir, int audioKbps,
@@ -184,11 +180,35 @@ public class TranscodeService {
                         shell(outDir.resolve("index.m3u8").toString())
                 )
         };
+        return runWithWatchdog(cmd, totalDuration, progressPct);
+    }
+
+    /**
+     * Starts an ffmpeg process with a watchdog that kills it after FFMPEG_TIMEOUT_MINUTES.
+     * The watchdog runs on a scheduled thread so that even if parseProgress blocks on
+     * readLine() (hung ffmpeg), the process is killed and the stream is closed, unblocking
+     * the caller.
+     */
+    private int runWithWatchdog(String[] cmd, int totalDuration, IntConsumer progressPct)
+            throws IOException, InterruptedException {
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
-        parseProgress(p, totalDuration, progressPct);
-        if (!p.waitFor(FFMPEG_TIMEOUT_MINUTES, TimeUnit.MINUTES)) {
-            log.error("ffmpeg audio transcode timed out after {} minutes, destroying process", FFMPEG_TIMEOUT_MINUTES);
+        ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "ffmpeg-watchdog");
+            t.setDaemon(true);
+            return t;
+        });
+        ScheduledFuture<?> killTask = watchdog.schedule(() -> {
+            log.error("ffmpeg timed out after {} minutes, destroying process", FFMPEG_TIMEOUT_MINUTES);
             p.destroyForcibly();
+        }, FFMPEG_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+        try {
+            parseProgress(p, totalDuration, progressPct);
+            p.waitFor();
+        } finally {
+            killTask.cancel(false);
+            watchdog.shutdownNow();
+        }
+        if (!p.isAlive() && p.exitValue() == 137) {
             throw new RuntimeException("ffmpeg timed out after " + FFMPEG_TIMEOUT_MINUTES + " minutes");
         }
         return p.exitValue();

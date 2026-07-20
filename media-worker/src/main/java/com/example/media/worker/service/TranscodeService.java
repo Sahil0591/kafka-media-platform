@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.function.IntConsumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -28,6 +29,8 @@ public class TranscodeService {
 
     private static final Logger log = LoggerFactory.getLogger(TranscodeService.class);
     private static final Pattern TIME_PATTERN = Pattern.compile("time=(\\d{2}):(\\d{2}):(\\d{2})\\.(\\d{2})");
+    private static final long FFMPEG_TIMEOUT_MINUTES = 25;
+    private static final long PROBE_TIMEOUT_SECONDS = 30;
 
     private final MinioClient minioClient;
     private final String bucket;
@@ -130,7 +133,11 @@ public class TranscodeService {
                     "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 " + shell(input.toString())};
             Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
             String output = new String(p.getInputStream().readAllBytes()).trim();
-            p.waitFor();
+            if (!p.waitFor(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                log.warn("ffprobe timed out after {}s, destroying process", PROBE_TIMEOUT_SECONDS);
+                p.destroyForcibly();
+                return 0;
+            }
             return (int) Double.parseDouble(output);
         } catch (Exception e) {
             log.warn("Could not probe duration, progress will be approximate: {}", e.getMessage());
@@ -155,7 +162,12 @@ public class TranscodeService {
         };
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
         parseProgress(p, totalDuration, progressPct);
-        return p.waitFor();
+        if (!p.waitFor(FFMPEG_TIMEOUT_MINUTES, TimeUnit.MINUTES)) {
+            log.error("ffmpeg video transcode timed out after {} minutes, destroying process", FFMPEG_TIMEOUT_MINUTES);
+            p.destroyForcibly();
+            throw new RuntimeException("ffmpeg timed out after " + FFMPEG_TIMEOUT_MINUTES + " minutes");
+        }
+        return p.exitValue();
     }
 
     private int runFfmpegAudio(Path input, Path outDir, int audioKbps,
@@ -174,7 +186,12 @@ public class TranscodeService {
         };
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
         parseProgress(p, totalDuration, progressPct);
-        return p.waitFor();
+        if (!p.waitFor(FFMPEG_TIMEOUT_MINUTES, TimeUnit.MINUTES)) {
+            log.error("ffmpeg audio transcode timed out after {} minutes, destroying process", FFMPEG_TIMEOUT_MINUTES);
+            p.destroyForcibly();
+            throw new RuntimeException("ffmpeg timed out after " + FFMPEG_TIMEOUT_MINUTES + " minutes");
+        }
+        return p.exitValue();
     }
 
     private void parseProgress(Process p, int totalDuration, IntConsumer progressPct) {

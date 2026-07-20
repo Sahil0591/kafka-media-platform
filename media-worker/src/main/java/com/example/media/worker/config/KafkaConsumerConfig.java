@@ -74,4 +74,26 @@ public class KafkaConsumerConfig {
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.RECORD);
         return factory;
     }
+
+    @Bean
+    public ConsumerFactory<String, String> dltConsumerFactory() {
+        Map<String, Object> props = new HashMap<>();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, "media-worker-dlt");
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        return new DefaultKafkaConsumerFactory<>(props);
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, String> dltKafkaListenerContainerFactory(
+            ConsumerFactory<String, String> dltConsumerFactory) {
+        ConcurrentKafkaListenerContainerFactory<String, String> factory =
+                new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(dltConsumerFactory);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.RECORD);
+        return factory;
+    }
 }

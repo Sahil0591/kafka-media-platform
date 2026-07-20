@@ -10,6 +10,15 @@ spring:
   kafka:
     bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
 
+management:
+  health:
+    kafka:
+      enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,info
+
 app:
   minio:
     endpoint: ${APP_MINIO_ENDPOINT:http://minio:9000}

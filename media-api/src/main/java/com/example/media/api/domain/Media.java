@@ -10,7 +10,7 @@ public class Media {
     @Id
     private UUID id;
     @Column(name = "owner_id", nullable = false)
-    private String ownerId;
+    private UUID ownerId;
     @Column(nullable = false)
     private String title;
     @Column(nullable = false)
@@ -28,8 +28,8 @@ public class Media {
 
     public UUID getId() { return id; }
     public void setId(UUID id) { this.id = id; }
-    public String getOwnerId() { return ownerId; }
-    public void setOwnerId(String ownerId) { this.ownerId = ownerId; }
+    public UUID getOwnerId() { return ownerId; }
+    public void setOwnerId(UUID ownerId) { this.ownerId = ownerId; }
     public String getTitle() { return title; }
     public void setTitle(String title) { this.title = title; }
     public String getType() { return type; }

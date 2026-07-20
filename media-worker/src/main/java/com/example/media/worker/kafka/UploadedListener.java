@@ -2,10 +2,12 @@ package com.example.media.worker.kafka;
 
 import com.example.media.common.events.MediaFailedEvent;
 import com.example.media.common.events.MediaProcessedEvent;
+import com.example.media.common.events.MediaTranscodeProgressEvent;
 import com.example.media.common.events.MediaUploadedEvent;
 import com.example.media.common.events.RenditionDto;
 import com.example.media.common.kafka.Topics;
 import com.example.media.common.model.MediaType;
+import com.example.media.common.model.ProcessingStage;
 import com.example.media.worker.service.TranscodeService;
 import io.minio.MinioClient;
 import io.minio.GetObjectArgs;
@@ -14,6 +16,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -27,6 +32,8 @@ import java.util.UUID;
 
 @Component
 public class UploadedListener {
+    private static final Logger log = LoggerFactory.getLogger(UploadedListener.class);
+
     private final JdbcTemplate jdbc;
     private final TranscodeService transcodeService;
     private final KafkaTemplate<String, Object> kafkaTemplate;
@@ -44,18 +51,28 @@ public class UploadedListener {
     @KafkaListener(topics = Topics.MEDIA_UPLOADED, groupId = "media-worker")
     public void onUploaded(MediaUploadedEvent evt) {
         String mediaId = evt.mediaId();
+        UUID mediaUuid = UUID.fromString(mediaId);
+        UUID jobId = null;
+        Path tmp = null;
+
         try {
-            // Skip if already READY
-            var status = jdbc.queryForObject("select status from media where id = ?", String.class, UUID.fromString(mediaId));
-            if ("READY".equals(status)) return;
+            // Atomic CAS: claim this media by transitioning PROCESSING → TRANSCODING.
+            // Only one consumer wins; duplicates see 0 rows updated and skip.
+            int claimed = jdbc.update(
+                    "UPDATE media SET status = 'TRANSCODING', updated_at = now() AT TIME ZONE 'utc' " +
+                    "WHERE id = ? AND status = 'PROCESSING'",
+                    mediaUuid);
+            if (claimed == 0) {
+                log.info("Skipping media {} — not in PROCESSING state (already claimed or completed)", mediaId);
+                return;
+            }
 
-            UUID jobId = UUID.randomUUID();
-            jdbc.update("insert into processing_jobs(id, media_id, stage, status, progress, started_at) values (?,?,?,?,?,?)",
-                    jobId, UUID.fromString(mediaId), "TRANSCODE", "RUNNING", 0, OffsetDateTime.now(ZoneOffset.UTC));
+            jobId = UUID.randomUUID();
+            jdbc.update("INSERT INTO processing_jobs(id, media_id, stage, status, progress, started_at) VALUES (?,?,?,?,?,?)",
+                    jobId, mediaUuid, "TRANSCODE", "RUNNING", 0, OffsetDateTime.now(ZoneOffset.UTC));
 
-
-            // Download from MinIO (FIX: use getObject + Files.copy)
-            Path tmp = Files.createTempFile("raw-", ".bin");
+            // Download raw file from MinIO
+            tmp = Files.createTempFile("raw-", ".bin");
             try (InputStream stream = minio.getObject(
                     GetObjectArgs.builder()
                             .bucket(bucket)
@@ -64,32 +81,60 @@ public class UploadedListener {
                 Files.copy(stream, tmp, StandardCopyOption.REPLACE_EXISTING);
             }
 
-                var out = transcodeService.transcodeToHls(tmp, mediaId, evt.type());
+            final UUID progressJobId = jobId;
+            var out = transcodeService.transcodeToHls(tmp, mediaId, evt.type(), (pct, stage) -> {
+                kafkaTemplate.send(Topics.MEDIA_TRANSCODE_PROGRESS, mediaId,
+                        new MediaTranscodeProgressEvent(mediaId, ProcessingStage.TRANSCODE, pct, stage, Instant.now()));
+                jdbc.update("UPDATE processing_jobs SET progress = ? WHERE id = ?", pct, progressJobId);
+            });
 
-            // Update DB
-            jdbc.update("update media set status = ?, hls_master_manifest_key = ?, updated_at = now() at time zone 'utc' where id = ?",
-                    "READY", out.masterKey(), UUID.fromString(mediaId));
+            // Update media to READY
+            jdbc.update("UPDATE media SET status = ?, hls_master_manifest_key = ?, updated_at = now() AT TIME ZONE 'utc' WHERE id = ?",
+                    "READY", out.masterKey(), mediaUuid);
 
-                jdbc.update("update processing_jobs set status = ?, progress = ?, ended_at = now() at time zone 'utc' where id = ?",
+            // Mark job complete
+            jdbc.update("UPDATE processing_jobs SET status = ?, progress = ?, ended_at = now() AT TIME ZONE 'utc' WHERE id = ?",
                     "DONE", 100, jobId);
 
-                List<RenditionDto> renditions;
-                if (evt.type() == MediaType.AUDIO) {
+            // Build renditions and persist to DB
+            List<RenditionDto> renditions;
+            if (evt.type() == MediaType.AUDIO) {
+                renditions = List.of(new RenditionDto("audio", out.variantKeys().get(0)));
+            } else {
                 renditions = List.of(
-                    new RenditionDto("audio", out.variantKeys().get(0))
-                );
-                } else {
-                renditions = List.of(
-                    new RenditionDto("720p", out.variantKeys().get(0)),
-                    new RenditionDto("480p", out.variantKeys().get(1))
-                );
-                }
-            kafkaTemplate.send(Topics.MEDIA_PROCESSED, mediaId, new MediaProcessedEvent(mediaId, "READY", out.masterKey(), renditions, null, Instant.now()));
+                        new RenditionDto("720p", out.variantKeys().get(0)),
+                        new RenditionDto("480p", out.variantKeys().get(1)));
+            }
+
+            for (RenditionDto r : renditions) {
+                jdbc.update("INSERT INTO renditions(id, media_id, quality, manifest_key) VALUES (?,?,?,?)",
+                        UUID.randomUUID(), mediaUuid, r.quality(), r.manifestKey());
+            }
+
+            kafkaTemplate.send(Topics.MEDIA_PROCESSED, mediaId,
+                    new MediaProcessedEvent(mediaId, "READY", out.masterKey(), renditions, out.durationSeconds(), Instant.now()));
+
+            log.info("Media {} processed successfully", mediaId);
         } catch (Exception e) {
-            e.printStackTrace(); // Print error for visibility
-            kafkaTemplate.send(Topics.MEDIA_FAILED, mediaId, new MediaFailedEvent(mediaId, com.example.media.common.model.ProcessingStage.TRANSCODE, "ERROR", e.getMessage(), Instant.now()));
-            jdbc.update("update media set status = ?, updated_at = now() at time zone 'utc' where id = ?",
-                "FAILED", UUID.fromString(mediaId));
+            log.error("Processing failed for media {}", mediaId, e);
+
+            kafkaTemplate.send(Topics.MEDIA_FAILED, mediaId,
+                    new MediaFailedEvent(mediaId, ProcessingStage.TRANSCODE,
+                            "ERROR", e.getMessage(), Instant.now()));
+
+            jdbc.update("UPDATE media SET status = ?, updated_at = now() AT TIME ZONE 'utc' WHERE id = ?",
+                    "FAILED", mediaUuid);
+
+            // Update processing job with failure details
+            if (jobId != null) {
+                jdbc.update("UPDATE processing_jobs SET status = ?, error_message = ?, ended_at = now() AT TIME ZONE 'utc' WHERE id = ?",
+                        "FAILED", e.getMessage(), jobId);
+            }
+        } finally {
+            // Clean up temp file
+            if (tmp != null) {
+                try { Files.deleteIfExists(tmp); } catch (Exception ignored) {}
+            }
         }
     }
 }

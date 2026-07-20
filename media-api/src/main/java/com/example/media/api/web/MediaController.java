@@ -1,14 +1,21 @@
 package com.example.media.api.web;
 
 import com.example.media.api.domain.Media;
+import com.example.media.api.domain.Rendition;
 import com.example.media.api.repo.MediaRepository;
 import com.example.media.api.repo.ProcessingJobRepository;
 import com.example.media.api.repo.RenditionRepository;
 import com.example.media.common.events.MediaUploadedEvent;
 import com.example.media.common.kafka.Topics;
 import com.example.media.common.model.MediaType;
+import io.minio.GetPresignedObjectUrlArgs;
+import io.minio.ListObjectsArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
+import io.minio.RemoveObjectArgs;
+import io.minio.Result;
+import io.minio.http.Method;
+import io.minio.messages.Item;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -19,17 +26,25 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.InputStream;
 import java.net.URLConnection;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/media")
 @Validated
 public class MediaController {
+
+    private static final Logger log = LoggerFactory.getLogger(MediaController.class);
 
     private final MediaRepository mediaRepository;
     private final ProcessingJobRepository jobRepository;
@@ -38,6 +53,7 @@ public class MediaController {
     private final MinioClient minioClient;
     private final String bucket;
     private final String publicBaseUrl;
+    private final String minioEndpoint;
 
     public MediaController(MediaRepository mediaRepository,
                            ProcessingJobRepository jobRepository,
@@ -45,7 +61,8 @@ public class MediaController {
                            KafkaTemplate<String, Object> kafkaTemplate,
                            MinioClient minioClient,
                            @Value("${app.minio.bucket}") String bucket,
-                           @Value("${app.public-base-url}") String publicBaseUrl) {
+                           @Value("${app.public-base-url}") String publicBaseUrl,
+                           @Value("${app.minio.endpoint}") String minioEndpoint) {
         this.mediaRepository = mediaRepository;
         this.jobRepository = jobRepository;
         this.renditionRepository = renditionRepository;
@@ -53,19 +70,50 @@ public class MediaController {
         this.minioClient = minioClient;
         this.bucket = bucket;
         this.publicBaseUrl = publicBaseUrl;
+        this.minioEndpoint = minioEndpoint;
     }
 
     public record InitUploadRequest(String title, String type, String filename, String contentType) {}
     public record InitUploadResponse(UUID mediaId, String objectKey) {}
 
+    // ── 1. List all my media ──────────────────────────────────────────────────
+    @GetMapping
+    public List<Map<String, Object>> listMyMedia(@AuthenticationPrincipal UUID userId) {
+        return mediaRepository.findByOwnerId(userId).stream()
+                .map(m -> {
+                    Map<String, Object> item = new java.util.LinkedHashMap<>();
+                    item.put("id", m.getId());
+                    item.put("title", m.getTitle());
+                    item.put("type", m.getType());
+                    item.put("status", m.getStatus());
+                    item.put("createdAt", m.getCreatedAt());
+                    item.put("updatedAt", m.getUpdatedAt());
+                    return item;
+                })
+                .collect(Collectors.toList());
+    }
+
     @PostMapping("/init-upload")
     @Transactional
     public InitUploadResponse initUpload(@AuthenticationPrincipal UUID userId, @RequestBody InitUploadRequest req) {
+        if (req.title() == null || req.title().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "title is required");
+        }
+        if (req.filename() == null || req.filename().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "filename is required");
+        }
+        try {
+            MediaType.valueOf(req.type());
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "type must be one of: VIDEO, AUDIO");
+        }
+
         UUID id = UUID.randomUUID();
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         Media m = new Media();
         m.setId(id);
-        m.setOwnerId(userId.toString());
+        m.setOwnerId(userId);
         m.setTitle(req.title());
         m.setType(req.type());
         m.setStatus("UPLOADING");
@@ -96,7 +144,6 @@ public class MediaController {
     public record CompleteUploadRequest(String objectKey, String contentType) {}
 
     @PostMapping("/{mediaId}/complete-upload")
-    @Transactional
     public Map<String, String> completeUpload(@AuthenticationPrincipal UUID userId, @PathVariable("mediaId") UUID mediaId, @RequestBody CompleteUploadRequest req) {
         Media m = loadOwnedMedia(userId, mediaId);
         String storedKey = m.getRawObjectKey();
@@ -116,36 +163,119 @@ public class MediaController {
 
         MediaUploadedEvent evt = new MediaUploadedEvent(
                 mediaId.toString(),
-                m.getOwnerId(),
+                m.getOwnerId().toString(),
                 MediaType.valueOf(m.getType()),
                 storedKey,
                 filename,
                 contentType,
                 java.time.Instant.now()
         );
-        kafkaTemplate.send(Topics.MEDIA_UPLOADED, mediaId.toString(), evt);
+
+        try {
+            kafkaTemplate.send(Topics.MEDIA_UPLOADED, mediaId.toString(), evt).get(10, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.error("Kafka send failed for media {}, rolling back to UPLOADING", mediaId, e);
+            m.setStatus("UPLOADING");
+            m.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
+            mediaRepository.save(m);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Failed to queue processing — please retry");
+        }
         return Map.of("status", "PROCESSING");
+    }
+
+    // ── 2. Delete media ───────────────────────────────────────────────────────
+    @DeleteMapping("/{mediaId}")
+    @Transactional
+    public Map<String, String> deleteMedia(@AuthenticationPrincipal UUID userId,
+                                           @PathVariable("mediaId") UUID mediaId) throws Exception {
+        Media m = loadOwnedMedia(userId, mediaId);
+
+        // Remove raw file from MinIO
+        if (m.getRawObjectKey() != null) {
+            minioClient.removeObject(RemoveObjectArgs.builder()
+                    .bucket(bucket).object(m.getRawObjectKey()).build());
+        }
+
+        // Remove all HLS objects (manifests + segments) recursively
+        deleteMinioPrefix("hls/" + mediaId + "/");
+
+        // Delete media row — DB cascades to renditions and processing_jobs
+        mediaRepository.deleteById(mediaId);
+        return Map.of("status", "deleted");
+    }
+
+    // ── 3. Update media metadata ──────────────────────────────────────────────
+    public record UpdateMetadataRequest(String title) {}
+
+    @PatchMapping("/{mediaId}")
+    @Transactional
+    public Map<String, Object> updateMetadata(@AuthenticationPrincipal UUID userId,
+                                              @PathVariable("mediaId") UUID mediaId,
+                                              @RequestBody UpdateMetadataRequest req) {
+        Media m = loadOwnedMedia(userId, mediaId);
+        if (req.title() != null && !req.title().isBlank()) {
+            m.setTitle(req.title());
+        }
+        m.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
+        mediaRepository.save(m);
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("id", m.getId());
+        result.put("title", m.getTitle());
+        result.put("type", m.getType());
+        result.put("status", m.getStatus());
+        result.put("updatedAt", m.getUpdatedAt());
+        return result;
+    }
+
+    // ── 4. Download original file ─────────────────────────────────────────────
+    @GetMapping("/{mediaId}/download")
+    public Map<String, String> download(@AuthenticationPrincipal UUID userId,
+                                        @PathVariable("mediaId") UUID mediaId) throws Exception {
+        Media m = loadOwnedMedia(userId, mediaId);
+        if (m.getRawObjectKey() == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Original file not available");
+        }
+        String url = minioClient.getPresignedObjectUrl(
+                GetPresignedObjectUrlArgs.builder()
+                        .method(Method.GET)
+                        .bucket(bucket)
+                        .object(m.getRawObjectKey())
+                        .expiry(1, TimeUnit.HOURS)
+                        .build());
+        return Map.of("downloadUrl", url);
+    }
+
+    // ── 5. View rendition details ─────────────────────────────────────────────
+    @GetMapping("/{mediaId}/renditions")
+    public List<Map<String, Object>> renditions(@AuthenticationPrincipal UUID userId,
+                                                @PathVariable("mediaId") UUID mediaId) {
+        loadOwnedMedia(userId, mediaId); // ownership check
+        return renditionRepository.findByMediaId(mediaId).stream()
+                .map(r -> {
+                    Map<String, Object> item = new java.util.LinkedHashMap<>();
+                    item.put("id", r.getId());
+                    item.put("quality", r.getQuality());
+                    item.put("codec", r.getCodec());
+                    item.put("bitrateKbps", r.getBitrateKbps());
+                    item.put("manifestKey", r.getManifestKey());
+                    return item;
+                })
+                .collect(Collectors.toList());
     }
 
     private static String inferContentType(Media media, String filename, String requestContentType) {
         if (requestContentType != null && !requestContentType.isBlank()) {
             return requestContentType;
         }
-
         String guessed = filename == null ? null : URLConnection.guessContentTypeFromName(filename);
         if (guessed != null && !guessed.isBlank()) {
             return guessed;
         }
-
-        // Conservative defaults if we can't infer reliably.
         if (media != null) {
             String type = media.getType();
-            if ("AUDIO".equalsIgnoreCase(type)) {
-                return "audio/mpeg";
-            }
-            if ("VIDEO".equalsIgnoreCase(type)) {
-                return "video/mp4";
-            }
+            if ("AUDIO".equalsIgnoreCase(type)) return "audio/mpeg";
+            if ("VIDEO".equalsIgnoreCase(type)) return "video/mp4";
         }
         return "application/octet-stream";
     }
@@ -159,16 +289,14 @@ public class MediaController {
         result.put("title", m.getTitle());
         result.put("type", m.getType());
         result.put("status", m.getStatus());
-
         String message = switch (m.getStatus()) {
             case "READY" -> "Uploaded successfully";
             case "FAILED" -> "Processing failed";
-            case "PROCESSING" -> "Processing";
+            case "PROCESSING", "TRANSCODING" -> "Processing";
             case "UPLOADING" -> "Uploading";
             default -> m.getStatus();
         };
         result.put("message", message);
-
         result.put("stage", job.map(j -> j.getStage()).orElse(null));
         result.put("progress", job.map(j -> j.getProgress()).orElse(null));
         result.put("error", job.map(j -> j.getErrorMessage()).orElse(null));
@@ -180,17 +308,31 @@ public class MediaController {
         Media m = loadOwnedMedia(userId, mediaId);
         String hlsKey = m.getHlsMasterManifestKey();
         if (hlsKey == null) {
-            throw new IllegalStateException("Media not ready");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Media is not ready for playback");
         }
-        String url = "http://localhost:9000/" + bucket + "/" + hlsKey;
+        String url = minioEndpoint + "/" + bucket + "/" + hlsKey;
         return Map.of("hlsUrl", url);
     }
 
     private Media loadOwnedMedia(UUID userId, UUID mediaId) {
-        Media m = mediaRepository.findById(mediaId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
-        if (m.getOwnerId() == null || !m.getOwnerId().equals(userId.toString())) {
+        Media m = mediaRepository.findById(mediaId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (!userId.equals(m.getOwnerId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN);
         }
         return m;
+    }
+
+    private void deleteMinioPrefix(String prefix) {
+        Iterable<Result<Item>> objects = minioClient.listObjects(
+                ListObjectsArgs.builder().bucket(bucket).prefix(prefix).recursive(true).build());
+        for (Result<Item> result : objects) {
+            try {
+                minioClient.removeObject(RemoveObjectArgs.builder()
+                        .bucket(bucket).object(result.get().objectName()).build());
+            } catch (Exception e) {
+                log.warn("Failed to delete MinIO object under prefix '{}': {}", prefix, e.getMessage());
+            }
+        }
     }
 }

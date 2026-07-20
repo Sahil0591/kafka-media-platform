@@ -72,3 +72,10 @@ docker-compose.override.yaml
 node_modules/
 dist/
 build/
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Graphify
+graphify-out/

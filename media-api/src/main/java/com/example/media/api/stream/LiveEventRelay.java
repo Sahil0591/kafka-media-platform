@@ -56,7 +56,7 @@ public class LiveEventRelay {
 
     @KafkaListener(
             topics = Topics.MEDIA_TRANSCODE_PROGRESS,
-            groupId = "${app.stream.relay-group-id}",
+            groupId = "#{T(com.example.media.api.stream.RelayGroup).ID}",
             properties = {
                     "auto.offset.reset=latest",
                     "spring.json.value.default.type=com.example.media.common.events.MediaTranscodeProgressEvent"})
@@ -80,7 +80,7 @@ public class LiveEventRelay {
 
     @KafkaListener(
             topics = Topics.MEDIA_PROCESSED,
-            groupId = "${app.stream.relay-group-id}",
+            groupId = "#{T(com.example.media.api.stream.RelayGroup).ID}",
             properties = {
                     "auto.offset.reset=latest",
                     "spring.json.value.default.type=com.example.media.common.events.MediaProcessedEvent"})
@@ -104,7 +104,7 @@ public class LiveEventRelay {
 
     @KafkaListener(
             topics = Topics.MEDIA_FAILED,
-            groupId = "${app.stream.relay-group-id}",
+            groupId = "#{T(com.example.media.api.stream.RelayGroup).ID}",
             properties = {
                     "auto.offset.reset=latest",
                     "spring.json.value.default.type=com.example.media.common.events.MediaFailedEvent"})

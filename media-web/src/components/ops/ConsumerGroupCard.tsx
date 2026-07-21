@@ -61,10 +61,12 @@ export function ConsumerGroupCard({ group }: { group: KafkaConsumerGroup }) {
             <li
               key={member.memberId}
               title={`${member.clientId} on ${member.host}`}
-              className="rounded-md border border-white/8 bg-white/[0.03] px-2 py-1 font-mono text-[10px] text-white/40"
+              className="flex max-w-full items-center gap-1.5 rounded-md border border-white/8 bg-white/[0.03] px-2 py-1 font-mono text-[10px] text-white/40"
             >
-              {member.clientId || 'consumer'}
-              <span className="ml-1.5 text-white/25">{member.assignedPartitions}p</span>
+              {/* Real client ids embed a UUID and overflow the chip; the full
+                  value stays available in the title attribute. */}
+              <span className="truncate">{member.clientId || 'consumer'}</span>
+              <span className="shrink-0 text-white/25">{member.assignedPartitions}p</span>
             </li>
           ))}
         </ul>

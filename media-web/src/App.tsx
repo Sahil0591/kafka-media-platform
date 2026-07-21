@@ -1,62 +1,109 @@
+import { lazy, Suspense } from 'react'
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { AuthProvider, useAuth } from '@/auth/AuthContext'
+import { StreamProvider } from '@/stream/StreamProvider'
+import { AppShell } from '@/components/layout/AppShell'
 import { Aurora } from '@/components/ui/Aurora'
-import { Button } from '@/components/ui/Button'
-import { Panel, PanelLabel } from '@/components/ui/Panel'
-import { StatusBadge } from '@/components/ui/StatusBadge'
-import { Skeleton } from '@/components/ui/Skeleton'
+import { Mark } from '@/components/brand/Wordmark'
+import SignIn from '@/routes/SignIn'
 
-/**
- * Design system preview.
- *
- * Temporary shell that renders the primitives so the visual language can be
- * reviewed before any product surface is wired to it. Replaced by the router
- * in the next step.
- */
+// Route-level code splitting keeps the first paint - the sign-in screen - small.
+const Library = lazy(() => import('@/routes/Library'))
+const Upload = lazy(() => import('@/routes/Upload'))
+const Pulse = lazy(() => import('@/routes/Pulse'))
+const Watch = lazy(() => import('@/routes/Watch'))
+
 export default function App() {
   return (
-    <div className="grain min-h-dvh">
+    <BrowserRouter>
+      <AuthProvider>
+        <Gate />
+      </AuthProvider>
+    </BrowserRouter>
+  )
+}
+
+/**
+ * Decides between the entry screen and the authenticated shell.
+ *
+ * The stream connection lives above the router so it survives navigation, and
+ * is only enabled once a session exists.
+ */
+function Gate() {
+  const { profile, restoring } = useAuth()
+  const location = useLocation()
+
+  if (restoring) return <BootSplash />
+
+  if (!profile) {
+    return (
+      <Routes>
+        <Route path="*" element={<SignIn />} />
+      </Routes>
+    )
+  }
+
+  return (
+    <StreamProvider enabled>
+      <Routes>
+        <Route element={<AppShell />}>
+          <Route
+            index
+            element={
+              <RouteFrame key={location.pathname}>
+                <Library />
+              </RouteFrame>
+            }
+          />
+          <Route
+            path="upload"
+            element={
+              <RouteFrame key={location.pathname}>
+                <Upload />
+              </RouteFrame>
+            }
+          />
+          <Route
+            path="pulse"
+            element={
+              <RouteFrame key={location.pathname}>
+                <Pulse />
+              </RouteFrame>
+            }
+          />
+          <Route
+            path="watch/:mediaId"
+            element={
+              <RouteFrame key={location.pathname}>
+                <Watch />
+              </RouteFrame>
+            }
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </StreamProvider>
+  )
+}
+
+/** Suspense boundary plus the shared page-enter transition. */
+function RouteFrame({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<RouteFallback />}>{children}</Suspense>
+}
+
+function RouteFallback() {
+  return (
+    <div className="grid min-h-[60vh] place-items-center">
+      <Mark className="size-8 animate-pulse" />
+    </div>
+  )
+}
+
+function BootSplash() {
+  return (
+    <div className="grid min-h-dvh place-items-center">
       <Aurora />
-
-      <main className="mx-auto max-w-5xl px-6 py-24">
-        <p className="text-[11px] font-medium tracking-[0.28em] text-white/35 uppercase">Aperture</p>
-        <h1 className="mt-4 text-5xl leading-[1.05] sm:text-6xl">
-          A media platform that <span className="text-spectrum">shows its pulse</span>
-        </h1>
-        <p className="mt-5 max-w-xl text-[15px] leading-relaxed text-white/50">
-          Every upload becomes a stream of events. This interface renders that stream as it happens.
-        </p>
-
-        <div className="mt-9 flex flex-wrap gap-3">
-          <Button size="lg">Primary action</Button>
-          <Button size="lg" variant="glass">
-            Glass action
-          </Button>
-          <Button size="lg" variant="ghost">
-            Ghost action
-          </Button>
-        </div>
-
-        <div className="mt-16 grid gap-5 sm:grid-cols-2">
-          <Panel interactive>
-            <PanelLabel>Status vocabulary</PanelLabel>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <StatusBadge status="UPLOADING" />
-              <StatusBadge status="PROCESSING" />
-              <StatusBadge status="TRANSCODING" />
-              <StatusBadge status="READY" />
-              <StatusBadge status="FAILED" />
-            </div>
-          </Panel>
-
-          <Panel>
-            <PanelLabel>Loading state</PanelLabel>
-            <div className="mt-4 space-y-2.5">
-              <Skeleton className="h-3 w-2/3" />
-              <Skeleton className="h-3 w-full" />
-              <Skeleton className="h-3 w-5/12" />
-            </div>
-          </Panel>
-        </div>
-      </main>
+      <Mark className="size-10 animate-pulse" />
     </div>
   )
 }

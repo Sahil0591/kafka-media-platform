@@ -20,7 +20,9 @@ import java.util.UUID;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
-    
+
+    private static final String SSE_PATH_PREFIX = "/api/stream/";
+
     private final JwtUtil jwtUtil;
     
     public JwtAuthenticationFilter(JwtUtil jwtUtil) {
@@ -38,38 +40,55 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                                     HttpServletResponse response, 
                                     FilterChain filterChain) throws ServletException, IOException {
         
+        String token = resolveToken(request);
+
+        if (token != null && !token.isEmpty()) {
+            try {
+                UUID userId = jwtUtil.getUserIdFromToken(token);
+                UsernamePasswordAuthenticationToken authentication =
+                        new UsernamePasswordAuthenticationToken(userId, null, new ArrayList<>());
+                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                SecurityContextHolder.getContext().setAuthentication(authentication);
+            } catch (Exception e) {
+                log.warn("JWT rejected for {} {}: {}", request.getMethod(), request.getRequestURI(), e.getClass().getSimpleName());
+            }
+        }
+
+        filterChain.doFilter(request, response);
+    }
+
+    private String resolveToken(HttpServletRequest request) {
         String authHeader = request.getHeader("Authorization");
 
         if (authHeader != null) {
             String trimmed = authHeader.trim();
-            if (trimmed.regionMatches(true, 0, "Bearer ", 0, 7)) {
-                String token = trimmed.substring(7).trim();
-
-                if (token.length() >= 2) {
-                    if ((token.startsWith("\"") && token.endsWith("\""))
-                            || (token.startsWith("'") && token.endsWith("'"))) {
-                        token = token.substring(1, token.length() - 1).trim();
-                    }
-                }
-
-                if (token.isEmpty()) {
-                    log.debug("Empty Bearer token for {} {}", request.getMethod(), request.getRequestURI());
-                } else {
-                    try {
-                        UUID userId = jwtUtil.getUserIdFromToken(token);
-                        UsernamePasswordAuthenticationToken authentication =
-                                new UsernamePasswordAuthenticationToken(userId, null, new ArrayList<>());
-                        authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                        SecurityContextHolder.getContext().setAuthentication(authentication);
-                    } catch (Exception e) {
-                        log.warn("JWT rejected for {} {}: {}", request.getMethod(), request.getRequestURI(), e.getClass().getSimpleName());
-                    }
-                }
-            } else {
+            if (!trimmed.regionMatches(true, 0, "Bearer ", 0, 7)) {
                 log.debug("Non-Bearer Authorization header for {} {}", request.getMethod(), request.getRequestURI());
+                return null;
             }
+            String token = unquote(trimmed.substring(7).trim());
+            if (token.isEmpty()) {
+                log.debug("Empty Bearer token for {} {}", request.getMethod(), request.getRequestURI());
+            }
+            return token;
         }
-        
-        filterChain.doFilter(request, response);
+
+        // EventSource cannot set request headers, so SSE endpoints - and only
+        // those - also accept the token as a query parameter.
+        if (request.getServletPath().startsWith(SSE_PATH_PREFIX)) {
+            String param = request.getParameter("access_token");
+            return param == null ? null : unquote(param.trim());
+        }
+
+        return null;
+    }
+
+    private static String unquote(String token) {
+        if (token.length() >= 2
+                && ((token.startsWith("\"") && token.endsWith("\""))
+                || (token.startsWith("'") && token.endsWith("'")))) {
+            return token.substring(1, token.length() - 1).trim();
+        }
+        return token;
     }
 }

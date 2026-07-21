@@ -33,7 +33,7 @@ export function MediaCard({ item, index = 0 }: { item: LiveMedia; index?: number
         <Poster
           seed={item.id}
           title={item.title}
-          className="absolute inset-0 transition-transform duration-[900ms] ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:scale-[1.07]"
+          className="transition-transform duration-[900ms] ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:scale-[1.07]"
         />
 
         {playable && (

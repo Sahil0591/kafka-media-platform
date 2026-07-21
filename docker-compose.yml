@@ -118,6 +118,17 @@ services:
       kafka:
         condition: service_healthy
 
+  media-web:
+    build:
+      context: ./media-web
+      dockerfile: Dockerfile
+    ports:
+      - "5173:80"
+    # nginx proxies /api to media-api, so the browser sees a single origin and
+    # no CORS preflight is involved in production.
+    depends_on:
+      - media-api
+
   media-worker:
     build:
       context: .

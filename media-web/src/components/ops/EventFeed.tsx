@@ -13,7 +13,7 @@ import type { StreamEvent } from '@/lib/types'
  */
 export function EventFeed({ events, connected }: { events: StreamEvent[]; connected: boolean }) {
   return (
-    <Panel className="flex h-full flex-col" padded={false}>
+    <Panel className="flex flex-col" padded={false}>
       <div className="flex items-center justify-between border-b border-white/6 px-5 py-4">
         <PanelLabel>Event feed</PanelLabel>
         <span className="inline-flex items-center gap-2">
@@ -29,7 +29,9 @@ export function EventFeed({ events, connected }: { events: StreamEvent[]; connec
         </span>
       </div>
 
-      <div className="max-h-[30rem] min-h-40 flex-1 overflow-y-auto">
+      {/* Caps rather than fills: the feed hugs its content until it overflows,
+          so a quiet bus does not leave a column of empty glass. */}
+      <div className="max-h-[30rem] overflow-y-auto">
         {events.length === 0 ? (
           <p className="px-5 py-10 text-center text-[12px] text-white/30">
             Waiting for traffic. Upload a title to see the bus light up.

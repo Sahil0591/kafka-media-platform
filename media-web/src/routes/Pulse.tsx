@@ -101,7 +101,7 @@ export default function Pulse() {
           />
         </section>
 
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+        <section className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
           <div className="space-y-5">
             <div>
               <h2 className="mb-4 text-[1.05rem] font-semibold text-white/85">Consumer groups</h2>
@@ -123,7 +123,10 @@ export default function Pulse() {
             <TopicsPanel snapshot={snapshot} max={maxTopicRecords} />
           </div>
 
-          <EventFeed events={events} connected={connected} />
+          {/* Sticky so the live tail stays in view while the topic list scrolls */}
+          <div className="xl:sticky xl:top-24">
+            <EventFeed events={events} connected={connected} />
+          </div>
         </section>
       </div>
     </Page>

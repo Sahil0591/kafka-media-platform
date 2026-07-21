@@ -8,7 +8,6 @@ import { Panel, PanelLabel } from '@/components/ui/Panel'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { StatusBadge } from '@/components/ui/StatusBadge'
 import { api, ApiError } from '@/lib/api'
-import { compactNumber } from '@/lib/format'
 import { useMediaEvent } from '@/stream/StreamProvider'
 import type { MediaStatusDetail, Rendition } from '@/lib/types'
 
@@ -244,7 +243,7 @@ function RenditionsPanel({ renditions, status }: { renditions: Rendition[]; stat
               <span className="text-[13px] font-medium text-white/85">{rendition.quality}</span>
               <span className="font-mono text-[11px] text-white/35">
                 {rendition.codec ?? 'h264'}
-                {rendition.bitrateKbps ? ` - ${compactNumber(rendition.bitrateKbps)}k` : ''}
+                {rendition.bitrateKbps ? ` - ${rendition.bitrateKbps.toLocaleString()} kbps` : ''}
               </span>
             </li>
           ))}

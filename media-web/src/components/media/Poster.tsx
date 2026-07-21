@@ -22,8 +22,11 @@ export function Poster({
 }) {
   const art = useMemo(() => derive(seed), [seed])
 
+  // Fills its container rather than positioning itself: a caller passing
+  // `absolute` would otherwise collide with a hardcoded `relative` here, and
+  // whichever utility Tailwind emits last would silently win.
   return (
-    <div className={cn('relative isolate overflow-hidden bg-abyss', className)} aria-hidden>
+    <div className={cn('bg-abyss relative isolate size-full overflow-hidden', className)} aria-hidden>
       <div
         className="absolute inset-0"
         style={{
@@ -35,8 +38,14 @@ export function Poster({
         }}
       />
 
+      {/* `slice` keeps the rings circular - stretching them to fit the box turns
+          a 2.6:1 hero into flattened ellipses that read as a mistake. */}
       {arcs && (
-        <svg viewBox="0 0 200 200" className="absolute inset-0 size-full opacity-[0.22]" preserveAspectRatio="none">
+        <svg
+          viewBox="0 0 200 200"
+          className="absolute inset-0 size-full opacity-[0.22]"
+          preserveAspectRatio="xMidYMid slice"
+        >
           {[0, 1, 2].map((ring) => (
             <circle
               key={ring}

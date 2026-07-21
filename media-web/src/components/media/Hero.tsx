@@ -24,7 +24,7 @@ export function Hero({ item, inFlightCount }: { item: LiveMedia; inFlightCount: 
       className="rounded-panel relative isolate overflow-hidden border border-white/8"
     >
       <div className="relative aspect-[16/10] sm:aspect-[21/9] lg:aspect-[2.6/1]">
-        <Poster seed={item.id} title={item.title} className="absolute inset-0" arcs />
+        <Poster seed={item.id} title={item.title} arcs />
 
         {/* Layered scrims keep the headline legible over any generated seed */}
         <div className="absolute inset-0 bg-gradient-to-t from-void via-void/55 to-transparent" />

@@ -1,0 +1,247 @@
+@import 'tailwindcss';
+
+/* =============================================================================
+   Design tokens
+
+   The palette is a deep, slightly cool black with a violet-to-cyan signature
+   spectrum. Violet reads as "creative / media", cyan as "live / data" - the two
+   halves of this product. Status colours are reserved and never used
+   decoratively, so a red on screen always means something failed.
+   ========================================================================== */
+
+@theme {
+  /* Surfaces - each step is a real elevation, not a random shade */
+  --color-void: #050509;
+  --color-abyss: #08080e;
+  --color-surface: #0d0d15;
+  --color-surface-2: #13131d;
+  --color-surface-3: #1b1b28;
+
+  /* Signature spectrum */
+  --color-brand-50: #f2eeff;
+  --color-brand-200: #cfc2ff;
+  --color-brand-400: #a58cff;
+  --color-brand-500: #7c5cff;
+  --color-brand-600: #6438f5;
+  --color-brand-700: #4c22cc;
+
+  --color-pulse-300: #7ee7f8;
+  --color-pulse-400: #38d6ee;
+  --color-pulse-500: #12b8d6;
+
+  /* Reserved status colours */
+  --color-ready: #34d399;
+  --color-live: #38d6ee;
+  --color-warn: #fbbf24;
+  --color-fail: #fb5f7f;
+
+  /* Type */
+  --font-display: 'Inter Tight', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Code', monospace;
+
+  /* Motion - one easing vocabulary across the whole app */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out-soft: cubic-bezier(0.65, 0, 0.35, 1);
+
+  --radius-panel: 1.25rem;
+}
+
+/* =============================================================================
+   Base
+   ========================================================================== */
+
+@layer base {
+  html {
+    color-scheme: dark;
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background-color: var(--color-void);
+    color: color-mix(in oklab, white 92%, transparent);
+    font-family: var(--font-sans);
+    font-synthesis-weight: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.025em;
+    font-weight: 600;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-brand-500) 45%, transparent);
+    color: white;
+  }
+
+  /* Slim, unobtrusive scrollbars that match the surfaces */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, white 10%, transparent);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, white 20%, transparent);
+    background-clip: content-box;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-brand-400);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+/* =============================================================================
+   Component primitives
+
+   Kept as real CSS classes rather than repeated utility strings so the glass
+   recipe stays consistent everywhere it appears.
+   ========================================================================== */
+
+@layer components {
+  /* Frosted panel: translucent fill, blur, hairline border, and a top inner
+     highlight that reads as light catching a physical edge. */
+  .glass {
+    background: linear-gradient(
+      160deg,
+      color-mix(in oklab, white 7%, transparent),
+      color-mix(in oklab, white 2.5%, transparent)
+    );
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    border: 1px solid color-mix(in oklab, white 9%, transparent);
+    box-shadow:
+      inset 0 1px 0 0 color-mix(in oklab, white 10%, transparent),
+      0 24px 60px -28px rgb(0 0 0 / 0.9);
+  }
+
+  .glass-hover {
+    transition:
+      border-color 0.4s var(--ease-out-expo),
+      background-color 0.4s var(--ease-out-expo),
+      transform 0.4s var(--ease-out-expo);
+  }
+  .glass-hover:hover {
+    border-color: color-mix(in oklab, var(--color-brand-400) 35%, transparent);
+    background-color: color-mix(in oklab, white 4%, transparent);
+  }
+
+  /* Gradient hairline used to separate major regions */
+  .rule {
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklab, white 12%, transparent) 20%,
+      color-mix(in oklab, white 12%, transparent) 80%,
+      transparent
+    );
+  }
+
+  /* Text that carries the signature spectrum */
+  .text-spectrum {
+    background: linear-gradient(100deg, var(--color-brand-200), var(--color-pulse-300));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Filmic grain - keeps large flat blacks from banding on OLED panels */
+  .grain::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    pointer-events: none;
+    opacity: 0.028;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* Horizontal rails fade at the edges instead of hard-cutting */
+  .edge-fade-x {
+    mask-image: linear-gradient(90deg, transparent, black 3%, black 97%, transparent);
+  }
+
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* =============================================================================
+   Keyframes
+   ========================================================================== */
+
+@keyframes aurora-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  33% {
+    transform: translate3d(4%, -3%, 0) scale(1.08);
+  }
+  66% {
+    transform: translate3d(-3%, 3%, 0) scale(0.96);
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-live) 45%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@utility animate-aurora {
+  animation: aurora-drift 28s var(--ease-in-out-soft) infinite;
+}
+
+@utility animate-pulse-ring {
+  animation: pulse-ring 2s var(--ease-out-expo) infinite;
+}
+
+@utility animate-shimmer {
+  animation: shimmer 1.8s var(--ease-in-out-soft) infinite;
+}
+
+/* Respect users who have asked the system to calm things down */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

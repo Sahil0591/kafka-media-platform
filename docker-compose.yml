@@ -101,6 +101,10 @@ services:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       APP_PUBLIC_BASE_URL: http://localhost:8080
       APP_MINIO_ENDPOINT: http://minio:9000
+      # Browsers cannot resolve the compose service name, so playback URLs must
+      # point at the published port on the host instead.
+      APP_MINIO_PUBLIC_ENDPOINT: http://localhost:9000
+      APP_CORS_ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
       APP_MINIO_ACCESS_KEY: minioadmin
       APP_MINIO_SECRET_KEY: minioadmin
       APP_MINIO_BUCKET: media

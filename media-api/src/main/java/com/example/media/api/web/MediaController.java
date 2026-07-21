@@ -53,6 +53,11 @@ public class MediaController {
     private final MinioClient minioClient;
     private final String bucket;
     private final String publicBaseUrl;
+    /**
+     * Browser-reachable MinIO origin. Distinct from app.minio.endpoint, which is
+     * the in-network address the API itself uses - inside Docker that resolves to
+     * the service name, which no browser can reach.
+     */
     private final String minioEndpoint;
 
     public MediaController(MediaRepository mediaRepository,
@@ -62,7 +67,7 @@ public class MediaController {
                            MinioClient minioClient,
                            @Value("${app.minio.bucket}") String bucket,
                            @Value("${app.public-base-url}") String publicBaseUrl,
-                           @Value("${app.minio.endpoint}") String minioEndpoint) {
+                           @Value("${app.minio.public-endpoint}") String minioEndpoint) {
         this.mediaRepository = mediaRepository;
         this.jobRepository = jobRepository;
         this.renditionRepository = renditionRepository;

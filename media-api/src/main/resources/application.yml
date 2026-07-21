@@ -42,6 +42,9 @@ app:
     relay-group-id: ${APP_STREAM_RELAY_GROUP_ID:media-api-live-${random.uuid}}
   minio:
     endpoint: ${APP_MINIO_ENDPOINT:http://localhost:9000}
+    # Origin handed to browsers for HLS playback. Defaults to the internal
+    # endpoint, which is only correct when the API runs outside Docker.
+    public-endpoint: ${APP_MINIO_PUBLIC_ENDPOINT:${APP_MINIO_ENDPOINT:http://localhost:9000}}
     access-key: ${APP_MINIO_ACCESS_KEY:minioadmin}
     secret-key: ${APP_MINIO_SECRET_KEY:minioadmin}
     bucket: ${APP_MINIO_BUCKET:media}

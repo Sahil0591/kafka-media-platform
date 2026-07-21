@@ -29,8 +29,11 @@
   --color-pulse-400: #38d6ee;
   --color-pulse-500: #12b8d6;
 
-  /* Reserved status colours */
-  --color-ready: #34d399;
+  /* Reserved status colours.
+     ready is a true green rather than an emerald: against the cyan used for
+     "live" an emerald sits at only dE 12 in OKLab, which is below the
+     normal-vision separation floor. This step clears it at dE 16. */
+  --color-ready: #4ade80;
   --color-live: #38d6ee;
   --color-warn: #fbbf24;
   --color-fail: #fb5f7f;
